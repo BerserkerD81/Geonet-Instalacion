@@ -14,8 +14,44 @@ import { TimeSelect } from './components/ui/time-select';
 declare global {
   interface Window {
     google: any;
+    __ENV__?: {
+      VITE_GOOGLE_MAPS_API_KEY?: string;
+    };
+    __onGoogleMapsLoaded?: () => void;
   }
 }
+
+let googleMapsLoadPromise: Promise<void> | null = null;
+const loadGoogleMapsPlaces = (apiKey: string) => {
+  if (typeof window === 'undefined') return Promise.resolve();
+  if (window.google?.maps?.places?.Autocomplete) return Promise.resolve();
+  if (googleMapsLoadPromise) return googleMapsLoadPromise;
+
+  googleMapsLoadPromise = new Promise<void>((resolve, reject) => {
+    const existing = document.getElementById('google-maps-js') as HTMLScriptElement | null;
+    if (existing) {
+      existing.addEventListener('load', () => resolve(), { once: true });
+      existing.addEventListener('error', () => reject(new Error('No se pudo cargar Google Maps')), { once: true });
+      return;
+    }
+
+    window.__onGoogleMapsLoaded = () => {
+      resolve();
+    };
+
+    const script = document.createElement('script');
+    script.id = 'google-maps-js';
+    script.async = true;
+    script.defer = true;
+    script.onerror = () => reject(new Error('No se pudo cargar Google Maps'));
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(
+      apiKey,
+    )}&libraries=places&language=es&region=CL&callback=__onGoogleMapsLoaded`;
+    document.head.appendChild(script);
+  });
+
+  return googleMapsLoadPromise;
+};
 
 interface FormData {
   firstName: string;
@@ -205,32 +241,48 @@ export default function App() {
 
   const NOMINATIM_BASE_URL = 'https://nominatim.openstreetmap.org';
 
-  // Inicializar Google Maps Autocomplete (Widget Oficial)
+  // Inicializar Google Maps Autocomplete (Places) vía js-api-loader
   useEffect(() => {
+    let cancelled = false;
+
     const initAutocomplete = async () => {
       try {
-        const { Autocomplete } = await google.maps.importLibrary("places") as any;
-        
+        const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
+        const runtimeKey = window.__ENV__?.VITE_GOOGLE_MAPS_API_KEY;
+        const effectiveKey = apiKey || runtimeKey;
+        if (!effectiveKey) {
+          console.error('Falta VITE_GOOGLE_MAPS_API_KEY');
+          return;
+        }
+
+        await loadGoogleMapsPlaces(effectiveKey);
+        if (cancelled) return;
+
+        const Autocomplete = window.google?.maps?.places?.Autocomplete;
+        if (!Autocomplete) throw new Error('Google Maps Places no disponible (Autocomplete)');
+
         if (addressInputRef.current) {
-          // Configuración del Widget
           autocompleteInstance.current = new Autocomplete(addressInputRef.current, {
             componentRestrictions: { country: 'cl' },
-            fields: ['address_components', 'geometry', 'formatted_address'], // Pedimos solo lo necesario
-            types: ['geocode'], // O 'address' para mayor precisión
+            fields: ['address_components', 'geometry', 'formatted_address'],
+            types: ['geocode'],
           });
 
-          // Escuchar el evento de selección
           autocompleteInstance.current.addListener('place_changed', () => {
             const place = autocompleteInstance.current.getPlace();
             fillAddressForm(place);
           });
         }
       } catch (error) {
-        console.error("Error cargando Google Maps Places Library", error);
+        console.error('Error cargando Google Maps Places Library', error);
       }
     };
-    initAutocomplete();
-  }, []); // Se ejecuta una vez al montar
+
+    void initAutocomplete();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Función para procesar la respuesta de Google (simplificada)
   const fillAddressForm = (place: any) => {
