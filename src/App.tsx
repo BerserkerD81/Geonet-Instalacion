@@ -79,6 +79,7 @@ export default function App() {
   const { register, handleSubmit, formState: { errors }, reset, setValue, watch, control } = useForm<FormData>();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [submitErrorMsg, setSubmitErrorMsg] = useState<string | null>(null);
 
   const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
@@ -91,8 +92,11 @@ export default function App() {
   const [ocrBack, setOcrBack] = useState<{ rut: string | null; docNumber: string | null }>({ rut: null, docNumber: null });
   const [ocrLoading, setOcrLoading] = useState<{ front: boolean; back: boolean }>({ front: false, back: false });
   const [ocrProgress, setOcrProgress] = useState<{ front: number; back: number }>({ front: 0, back: 0 });
+  const [ocrError, setOcrError] = useState<{ front: string | null; back: string | null }>({ front: null, back: null });
 
   const [cameraOpen, setCameraOpen] = useState<null | 'front' | 'back'>(null);
+  const [cameraStarting, setCameraStarting] = useState(false);
+  const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const idFrontFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -114,34 +118,76 @@ export default function App() {
   };
 
   useEffect(() => {
-    const startCamera = async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
-          audio: false,
-        });
-        streamRef.current = stream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-      } catch (e) {
-        console.error(e);
-        toast.error('No se pudo acceder a la cámara');
-        setCameraOpen(null);
-      }
-    };
-
-    if (cameraOpen) {
-      void startCamera();
-    } else {
+    if (!cameraOpen) {
       stopCamera();
+      setCameraError(null);
+      setCameraStarting(false);
+      return;
     }
 
     return () => {
       stopCamera();
     };
   }, [cameraOpen]);
+
+  const getCameraErrorMessage = (e: unknown) => {
+    const err = e as any;
+    const name = String(err?.name || '');
+    if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
+      return 'Permiso denegado. Habilita la cámara en tu navegador y reintenta.';
+    }
+    if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+      return 'No se encontró una cámara disponible en el dispositivo.';
+    }
+    if (name === 'NotReadableError' || name === 'TrackStartError') {
+      return 'La cámara está en uso por otra app.';
+    }
+    if (name === 'OverconstrainedError') {
+      return 'No se pudo usar la cámara trasera. Intenta nuevamente.';
+    }
+    if (name === 'SecurityError') {
+      return 'La cámara requiere un contexto seguro (HTTPS) o localhost.';
+    }
+    return 'No se pudo acceder a la cámara.';
+  };
+
+  const openCamera = async (side: 'front' | 'back') => {
+    if (side === 'back' && !hasIdFront) {
+      toast.error('Primero debes subir/tomar la foto del frente');
+      return;
+    }
+
+    stopCamera();
+    setCameraError(null);
+    setCameraStarting(true);
+    setCameraOpen(side);
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false,
+      });
+      streamRef.current = stream;
+
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        try {
+          await videoRef.current.play();
+        } catch {
+          // Some mobile browsers may block autoplay even when muted; user can still see preview once it starts.
+        }
+      }
+    } catch (e) {
+      console.error(e);
+      const msg = getCameraErrorMessage(e);
+      setCameraError(msg);
+      toast.error(msg);
+    } finally {
+      setCameraStarting(false);
+    }
+  };
 
   const fileToFileList = (file: File) => {
     const dt = new DataTransfer();
@@ -390,10 +436,13 @@ export default function App() {
       .replace(/[\u0300-\u036f]/g, '')
       .toUpperCase();
 
+  const normalizeLooseForKeywordSearch = (value: string) =>
+    normalizeForKeywordSearch(value).replace(/[^A-Z0-9]/g, '');
+
   const extractPreferredText = (page: any, kind: 'rut' | 'doc') => {
     const keywords =
       kind === 'rut'
-        ? ['RUN', 'RUT', 'R.U.T']
+        ? ['RUN', 'R.U.N', 'R U N', 'RUT', 'R.U.T', 'R U T']
         : ['NUMERO', 'N°', 'NRO', 'DOCUMENTO', 'DOC', 'NUM.'];
 
     const lines: string[] = [];
@@ -410,12 +459,195 @@ export default function App() {
 
     const picked = lines.filter((line) => {
       const normalized = normalizeForKeywordSearch(line);
-      return keywords.some((k) => normalized.includes(normalizeForKeywordSearch(k)));
+      const loose = normalizeLooseForKeywordSearch(line);
+      return keywords.some((k) => {
+        const kn = normalizeForKeywordSearch(k);
+        const kl = normalizeLooseForKeywordSearch(k);
+        return normalized.includes(kn) || loose.includes(kl);
+      });
     });
 
     const joinedPicked = picked.join('\n');
     const full = page?.text ? String(page.text) : '';
     return joinedPicked.trim().length > 0 ? joinedPicked : full;
+  };
+
+  const createBitmapFromFile = async (file: File) => {
+    // Try to honor EXIF orientation if the browser supports it.
+    try {
+      // imageOrientation is supported in modern browsers, but TS lib defs can vary.
+      return await createImageBitmap(file, { imageOrientation: 'from-image' } as any);
+    } catch {
+      return await createImageBitmap(file);
+    }
+  };
+
+  const preprocessImageForOcr = async (file: File, rotateDeg: 0 | 90 | 180 | 270 = 0) => {
+    if (!file.type.startsWith('image/')) return file;
+
+    const bitmap = await createBitmapFromFile(file);
+
+    const maxDim = 1600;
+    const rotated = rotateDeg === 90 || rotateDeg === 270;
+    const baseW = rotated ? bitmap.height : bitmap.width;
+    const baseH = rotated ? bitmap.width : bitmap.height;
+    const scale = Math.min(1, maxDim / Math.max(baseW, baseH));
+
+    const scaledW = Math.max(1, Math.round(bitmap.width * scale));
+    const scaledH = Math.max(1, Math.round(bitmap.height * scale));
+    const targetW = rotated ? scaledH : scaledW;
+    const targetH = rotated ? scaledW : scaledH;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = targetW;
+    canvas.height = targetH;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return file;
+
+    ctx.save();
+    ctx.translate(targetW / 2, targetH / 2);
+    ctx.rotate((rotateDeg * Math.PI) / 180);
+    ctx.drawImage(bitmap, -scaledW / 2, -scaledH / 2, scaledW, scaledH);
+    ctx.restore();
+    bitmap.close();
+
+    const toGrayscaleContrast = (sourceCtx: CanvasRenderingContext2D, w: number, h: number) => {
+      const imageData = sourceCtx.getImageData(0, 0, w, h);
+      const data = imageData.data;
+
+      const hist = new Array<number>(256).fill(0);
+      const contrast = 1.15;
+
+      // BBox of "ink" pixels for autocrop
+      let minX = w;
+      let minY = h;
+      let maxX = 0;
+      let maxY = 0;
+      let inkCount = 0;
+      const inkThreshold = 235;
+
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const i = (y * w + x) * 4;
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          let v = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
+          v = Math.max(0, Math.min(255, Math.round((v - 128) * contrast + 128)));
+          hist[v]++;
+          data[i] = v;
+          data[i + 1] = v;
+          data[i + 2] = v;
+
+          if (v < inkThreshold) {
+            inkCount++;
+            if (x < minX) minX = x;
+            if (y < minY) minY = y;
+            if (x > maxX) maxX = x;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+
+      return { imageData, hist, bbox: { minX, minY, maxX, maxY, inkCount } };
+    };
+
+    const { imageData, hist, bbox } = toGrayscaleContrast(ctx, targetW, targetH);
+    const data = imageData.data;
+
+    // Autocrop (útil cuando la cédula ocupa poco en la foto)
+    // Requiere suficiente "tinta" y un bbox razonable.
+    if (bbox.inkCount > (targetW * targetH) * 0.01) {
+      const bw = Math.max(1, bbox.maxX - bbox.minX + 1);
+      const bh = Math.max(1, bbox.maxY - bbox.minY + 1);
+      const bboxAreaRatio = (bw * bh) / (targetW * targetH);
+      if (bboxAreaRatio >= 0.08 && bboxAreaRatio <= 0.98) {
+        const padX = Math.round(bw * 0.04);
+        const padY = Math.round(bh * 0.04);
+        const sx = Math.max(0, bbox.minX - padX);
+        const sy = Math.max(0, bbox.minY - padY);
+        const sw = Math.min(targetW - sx, bw + padX * 2);
+        const sh = Math.min(targetH - sy, bh + padY * 2);
+
+        // Re-render cropped region into a new canvas, and optionally upscale.
+        const cropMaxDim = 1600;
+        const cropScale = Math.min(2, cropMaxDim / Math.max(sw, sh));
+        const outW = Math.max(1, Math.round(sw * cropScale));
+        const outH = Math.max(1, Math.round(sh * cropScale));
+
+        const croppedCanvas = document.createElement('canvas');
+        croppedCanvas.width = outW;
+        croppedCanvas.height = outH;
+        const croppedCtx = croppedCanvas.getContext('2d', { willReadFrequently: true });
+        if (croppedCtx) {
+          // Draw from original (rotated+scaled) canvas
+          croppedCtx.drawImage(canvas, sx, sy, sw, sh, 0, 0, outW, outH);
+
+          // Replace working canvas/context
+          canvas.width = outW;
+          canvas.height = outH;
+          const nextCtx = canvas.getContext('2d', { willReadFrequently: true });
+          if (nextCtx) {
+            nextCtx.drawImage(croppedCanvas, 0, 0);
+            // Recompute grayscale/hist on the cropped image
+            const recomputed = toGrayscaleContrast(nextCtx, outW, outH);
+            // copy results to current locals
+            (imageData as any).data = recomputed.imageData.data;
+            (hist as any).length = 0;
+            for (let i = 0; i < 256; i++) (hist as any).push(recomputed.hist[i]);
+            // swap data reference
+            (data as any).set?.(recomputed.imageData.data);
+          }
+        }
+      }
+    }
+
+    // Otsu threshold
+    const total = canvas.width * canvas.height;
+    let sum = 0;
+    for (let t = 0; t < 256; t++) sum += t * hist[t];
+
+    let sumB = 0;
+    let wB = 0;
+    let wF = 0;
+    let varMax = 0;
+    let threshold = 140;
+    for (let t = 0; t < 256; t++) {
+      wB += hist[t];
+      if (wB === 0) continue;
+      wF = total - wB;
+      if (wF === 0) break;
+      sumB += t * hist[t];
+      const mB = sumB / wB;
+      const mF = (sum - sumB) / wF;
+      const between = wB * wF * (mB - mF) * (mB - mF);
+      if (between > varMax) {
+        varMax = between;
+        threshold = t;
+      }
+    }
+
+    // Binarize
+    for (let i = 0; i < data.length; i += 4) {
+      const v = data[i];
+      const out = v > threshold ? 255 : 0;
+      data[i] = out;
+      data[i + 1] = out;
+      data[i + 2] = out;
+    }
+
+    // Re-read ctx after potential resize
+    const finalCtx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!finalCtx) return file;
+    // Apply binarized data onto the current canvas
+    // If canvas size changed, regenerate imageData for that size.
+    const finalImageData = finalCtx.getImageData(0, 0, canvas.width, canvas.height);
+    finalImageData.data.set(imageData.data);
+    finalCtx.putImageData(finalImageData, 0, 0);
+
+    const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    if (!blob) return file;
+    return new File([blob], file.name.replace(/\.[^.]+$/, '') + '-ocr.png', { type: 'image/png' });
   };
 
   // Ejecutar OCR sobre una imagen y extraer RUN/RUT + Número de documento
@@ -424,12 +656,14 @@ export default function App() {
 
     setOcrLoading((prev) => ({ ...prev, [side]: true }));
     setOcrProgress((prev) => ({ ...prev, [side]: 0 }));
+    setOcrError((prev) => ({ ...prev, [side]: null }));
     if (side === 'front') setOcrFront({ rut: null, docNumber: null });
     if (side === 'back') setOcrBack({ rut: null, docNumber: null });
 
+    let worker: any | null = null;
     try {
       const { createWorker } = await import('tesseract.js');
-      const worker = await createWorker('spa', undefined, {
+      worker = await createWorker('spa', undefined, {
         logger: (m: any) => {
           if (typeof m?.progress === 'number') {
             setOcrProgress((prev) => ({ ...prev, [side]: Math.round(m.progress * 100) }));
@@ -439,37 +673,128 @@ export default function App() {
 
       await worker.load();
       await worker.reinitialize('spa');
-      await worker.setParameters({
-        // Aumenta la precisión para RUN/RUT y números de documento
-        tessedit_char_whitelist: '0123456789Kk.-',
+      const baseParams: Record<string, string> = {
+        // Mejoras generales: DPI
+        user_defined_dpi: '300',
+        // Importante: incluir letras para detectar palabras guía (RUN/RUT/DOCUMENTO)
+        tessedit_char_whitelist: '0123456789Kk.-<ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÑñ°/ ',
         preserve_interword_spaces: '1',
-      });
+      };
 
-      const { data } = await worker.recognize(file);
-      await worker.terminate();
-
-      const rutText = extractPreferredText(data, 'rut').toUpperCase();
-      const docText = extractPreferredText(data, 'doc').toUpperCase();
-      const fallbackText = (data?.text || '').toUpperCase();
-
-      const rutRegex = /\b[0-9]{1,2}\.?[0-9]{3}\.?[0-9]{3}-\s*[0-9Kk]\b|\b[0-9]{7,8}-\s*[0-9Kk]\b|\b[0-9]{7,8}[0-9Kk]\b/g;
-      const docRegex = /\b\d{1,3}(?:\.\d{3}){2}\b|\b\d{9}\b/g;
-
-      const normalizeRut = (value: string) => value.replace(/\s+/g, '').replace(/\./g, '').replace(/-?([0-9Kk])$/i, '-$1');
+      const rutRegex =
+        /\b[0-9]{1,2}\.?[0-9]{3}\.?[0-9]{3}-\s*[0-9Kk]\b|\b[0-9]{7,8}-\s*[0-9Kk]\b|\b[0-9]{7,8}[0-9Kk]\b|\b[0-9]{7,8}\s*[<\-]\s*[0-9Kk]\b/g;
+      const docRegex = /\b\d{1,3}(?:\.\d{3}){2}\b|\b\d{8,9}\b/g;
+      const normalizeRut = (value: string) =>
+        value
+          .replace(/\s+/g, '')
+          .replace(/\./g, '')
+          .replace(/</g, '-')
+          .replace(/-?([0-9Kk])$/i, '-$1');
       const normalizeDoc = (value: string) => value.replace(/[^0-9]/g, '');
 
-      const rutCandidates = (
-        [...(rutText.match(rutRegex) || []), ...(fallbackText.match(rutRegex) || [])]
-      ).map(normalizeRut);
-      const docCandidates = (
-        [...(docText.match(docRegex) || []), ...(fallbackText.match(docRegex) || [])]
-      ).map(normalizeDoc);
+      const extractFromData = (data: any) => {
+        const rutText = extractPreferredText(data, 'rut').toUpperCase();
+        const docText = extractPreferredText(data, 'doc').toUpperCase();
+        const fallbackText = (data?.text || '').toUpperCase();
 
-      const extractedRut = rutCandidates.find((r) => validateRut(r)) || rutCandidates[0] || null;
-      const extractedDoc = docCandidates.find((d) => d.length === 9) || docCandidates[0] || null;
+        const rutCandidates = (
+          [...(rutText.match(rutRegex) || []), ...(fallbackText.match(rutRegex) || [])]
+        ).map(normalizeRut);
+        const docCandidates = (
+          [...(docText.match(docRegex) || []), ...(fallbackText.match(docRegex) || [])]
+        ).map(normalizeDoc);
+
+        const extractedRut = rutCandidates.find((r) => validateRut(r)) || rutCandidates[0] || null;
+        const extractedDoc =
+          docCandidates.find((d) => d.length === 9) ||
+          docCandidates.find((d) => d.length === 8) ||
+          docCandidates[0] ||
+          null;
+
+        return { extractedRut, extractedDoc };
+      };
+
+      const scoreResult = (rut: string | null, doc: string | null) => {
+        // Preferimos tener ambos; luego RUT válido; luego documento.
+        const rutIsValid = rut ? validateRut(rut) : false;
+        return (rut ? 10 : 0) + (doc ? 6 : 0) + (rutIsValid ? 6 : 0);
+      };
+
+      const tryRotations: Array<0 | 90 | 180 | 270> = [0, 90, 270, 180];
+      const tryPsms: Array<'6' | '11' | '4'> = ['6', '11', '4'];
+
+      let bestRut: string | null = null;
+      let bestDoc: string | null = null;
+      let bestScore = -1;
+      let bestRot: 0 | 90 | 180 | 270 = 0;
+      let bestPsm: '6' | '11' | '4' = '6';
+
+      // Nota: siempre se intenta primero respetando EXIF, luego rotaciones extra si hace falta.
+      for (const rot of tryRotations) {
+        const ocrFile = await preprocessImageForOcr(file, rot);
+
+        for (const psm of tryPsms) {
+          await worker.setParameters({ ...baseParams, tessedit_pageseg_mode: psm });
+          const result = await worker.recognize(ocrFile);
+          const { extractedRut, extractedDoc } = extractFromData(result.data);
+
+          const score = scoreResult(extractedRut, extractedDoc);
+          if (score > bestScore) {
+            bestScore = score;
+            bestRut = extractedRut;
+            bestDoc = extractedDoc;
+            bestRot = rot;
+            bestPsm = psm;
+          }
+
+          // Early exit: si ya tenemos un RUT válido, normalmente basta.
+          if (bestRut && validateRut(bestRut)) break;
+          // O si ya tenemos doc y rut (aunque el rut no esté validado todavía)
+          if (bestRut && bestDoc) break;
+        }
+
+        if (bestRut && validateRut(bestRut)) break; // suficiente en muchos casos
+        if (bestRut && bestDoc) break;
+      }
+
+      const extractedRut = bestRut;
+      const extractedDoc = bestDoc;
+
+      if (!extractedRut && !extractedDoc) {
+        setOcrError((prev) => ({
+          ...prev,
+          [side]: 'No se pudo leer texto en la imagen. Intenta con mejor luz y, si está girada, súbela en posición correcta.',
+        }));
+      }
 
       if (side === 'front') setOcrFront({ rut: extractedRut, docNumber: extractedDoc });
       if (side === 'back') setOcrBack({ rut: extractedRut, docNumber: extractedDoc });
+
+      // Log para depuración: datos detectados por OCR
+      try {
+        const currentCi = watch('ci') || '';
+        const rutMatchesCi = extractedRut && cleanRut(currentCi) ? cleanRut(extractedRut) === cleanRut(currentCi) : null;
+        const otherSide = side === 'front' ? 'back' : 'front';
+        const otherData = side === 'front' ? ocrBack : ocrFront;
+        const docMatchesOther =
+          extractedDoc && otherData.docNumber ? normalizeDoc(extractedDoc) === normalizeDoc(otherData.docNumber) : null;
+
+        console.log('[OCR]', {
+          side,
+          bestRot,
+          bestPsm,
+          extractedRut,
+          extractedDoc,
+          bestScore,
+          ciEntered: currentCi || null,
+          rutMatchesCi,
+          otherSide,
+          otherDocNumber: otherData.docNumber,
+          docMatchesOther,
+        });
+      } catch {
+        // ignore logging issues
+      }
 
       const currentCi = watch('ci') || '';
       if (extractedRut && cleanRut(currentCi) && cleanRut(extractedRut) !== cleanRut(currentCi)) {
@@ -485,7 +810,16 @@ export default function App() {
     } catch (err) {
       console.error('OCR error', err);
       toast.error('No se pudo procesar la imagen');
+      setOcrError((prev) => ({
+        ...prev,
+        [side]: 'Error procesando OCR. Intenta nuevamente con una foto más nítida.',
+      }));
     } finally {
+      try {
+        await worker?.terminate?.();
+      } catch {
+        // ignore
+      }
       setOcrLoading((prev) => ({ ...prev, [side]: false }));
       setOcrProgress((prev) => ({ ...prev, [side]: 0 }));
     }
@@ -546,6 +880,7 @@ export default function App() {
 
   const onSubmit = async (data: FormData) => {
     setIsSubmitting(true);
+    setSubmitErrorMsg(null);
     
     try {
       // Validar que se hayan seleccionado fechas
@@ -642,6 +977,7 @@ export default function App() {
 
     } catch (error) {
       console.error('Error al enviar el formulario:', error);
+      setSubmitErrorMsg(error instanceof Error ? error.message : 'Por favor, intenta nuevamente.');
       toast.error('Error al enviar la solicitud', { 
         description: error instanceof Error ? error.message : 'Por favor, intenta nuevamente.' 
       });
@@ -655,11 +991,43 @@ export default function App() {
   const docNumbersMatch = !ocrFront.docNumber || !ocrBack.docNumber || ocrFront.docNumber === ocrBack.docNumber;
   const ocrBlocksSubmit = !frontRutMatches || !backRutMatches || !docNumbersMatch;
 
+  // En modo pruebas no bloqueamos el envío por OCR.
+  // Para activar bloqueo en producción: setear VITE_ENFORCE_OCR_MATCH=true
+  const enforceOcrMatch = String((import.meta as any)?.env?.VITE_ENFORCE_OCR_MATCH ?? '').toLowerCase() === 'true';
+  const ocrShouldBlockSubmit = enforceOcrMatch && ocrBlocksSubmit;
+
   // Hook para combinar refs (React Hook Form + useRef de Google Maps)
   const { ref: addressHookRef, ...addressRest } = register('address', { required: 'Este campo es requerido' });
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50/50 via-white to-orange-50/50">
+      {isSubmitting && (
+        <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4">
+          <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-white/40 overflow-hidden">
+            <div className="bg-gradient-to-r from-primary to-primary/90 px-6 py-5 text-white">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center">
+                  <div className="w-5 h-5 border-2 border-white/90 border-t-transparent rounded-full animate-spin" />
+                </div>
+                <div>
+                  <div className="font-bold text-lg leading-tight">Enviando solicitud…</div>
+                  <div className="text-xs text-white/80">Subiendo datos y fotografías</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-6 py-5 space-y-4">
+              <div className="h-2 w-full bg-gray-200 rounded-full overflow-hidden">
+                <div className="h-2 w-1/3 bg-accent animate-pulse rounded-full" />
+              </div>
+              <p className="text-sm text-gray-600">
+                No cierres esta pantalla. Esto puede tardar unos segundos.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="bg-white border-b border-gray-200 shadow-md sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-5">
           <div className="flex items-center justify-between">
@@ -686,6 +1054,19 @@ export default function App() {
         </div>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+          {submitErrorMsg && (
+            <div className="rounded-2xl border border-destructive/20 bg-destructive/5 px-5 py-4 text-destructive shadow-sm">
+              <div className="font-bold">No se pudo enviar la solicitud</div>
+              <div className="text-sm opacity-90">{submitErrorMsg}</div>
+            </div>
+          )}
+          {submitted && !submitErrorMsg && (
+            <div className="rounded-2xl border border-accent/20 bg-accent/10 px-5 py-4 text-primary shadow-sm">
+              <div className="font-bold">¡Solicitud enviada!</div>
+              <div className="text-sm opacity-90">Nos pondremos en contacto contigo pronto.</div>
+            </div>
+          )}
+
           {cameraOpen && (
             <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
               <div className="w-full max-w-md bg-white rounded-2xl overflow-hidden shadow-2xl">
@@ -711,6 +1092,32 @@ export default function App() {
                     muted
                   />
 
+                  {(cameraStarting || cameraError) && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-white p-6">
+                      <div className="text-center space-y-3">
+                        {cameraStarting && (
+                          <div className="flex items-center justify-center gap-3">
+                            <div className="w-5 h-5 border-2 border-white/90 border-t-transparent rounded-full animate-spin" />
+                            <span className="text-sm font-semibold">Activando cámara…</span>
+                          </div>
+                        )}
+                        {cameraError && (
+                          <div className="space-y-3">
+                            <p className="text-sm">{cameraError}</p>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              onClick={() => void openCamera(cameraOpen)}
+                              className="bg-white/10 border-white/30 text-white hover:bg-white/20"
+                            >
+                              Reintentar
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   {/* Guía de encuadre */}
                   <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
                     <div className="w-[85%] aspect-[1.586/1] border-2 border-white/90 rounded-xl shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
@@ -732,6 +1139,7 @@ export default function App() {
                   <Button
                     type="button"
                     onClick={() => void captureFromCamera()}
+                    disabled={cameraStarting || Boolean(cameraError)}
                     className="flex-1 bg-gradient-to-r from-accent to-accent/90 hover:from-accent/90 hover:to-accent text-white"
                   >
                     Capturar
@@ -1099,7 +1507,7 @@ export default function App() {
                     <Button
                       type="button"
                       variant="outline"
-                      onClick={() => setCameraOpen('front')}
+                      onClick={() => void openCamera('front')}
                       className="w-full h-12 border-2 border-gray-200 hover:border-accent hover:text-accent rounded-xl"
                     >
                       Tomar foto (con guía)
@@ -1118,6 +1526,24 @@ export default function App() {
                         <div className="h-2 bg-accent" style={{ width: `${ocrProgress.front}%` }} />
                       </div>
                       <span className="text-xs text-gray-500">{ocrProgress.front}%</span>
+                    </div>
+                  )}
+                  {ocrError.front && (
+                    <div className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                      <div className="font-bold">OCR (Frente) con error</div>
+                      <div className="opacity-90">{ocrError.front}</div>
+                    </div>
+                  )}
+                  {!ocrError.front && ocrFront.rut && !frontRutMatches && (
+                    <div className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                      <div className="font-bold">RUN/RUT no coincide</div>
+                      <div className="opacity-90">El RUN/RUT detectado en el frente no coincide con el ingresado.</div>
+                    </div>
+                  )}
+                  {!ocrError.front && ocrFront.docNumber && ocrBack.docNumber && !docNumbersMatch && (
+                    <div className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                      <div className="font-bold">N° de documento no coincide</div>
+                      <div className="opacity-90">El número detectado en el frente no coincide con el reverso.</div>
                     </div>
                   )}
                   {(ocrFront.rut || ocrFront.docNumber) && (
@@ -1186,7 +1612,7 @@ export default function App() {
                           toast.error('Primero debes subir/tomar la foto del frente');
                           return;
                         }
-                        setCameraOpen('back');
+                        void openCamera('back');
                       }}
                       disabled={!hasIdFront}
                       className="w-full h-12 border-2 border-gray-200 hover:border-accent hover:text-accent rounded-xl disabled:opacity-60 disabled:cursor-not-allowed"
@@ -1207,6 +1633,24 @@ export default function App() {
                         <div className="h-2 bg-accent" style={{ width: `${ocrProgress.back}%` }} />
                       </div>
                       <span className="text-xs text-gray-500">{ocrProgress.back}%</span>
+                    </div>
+                  )}
+                  {ocrError.back && (
+                    <div className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                      <div className="font-bold">OCR (Reverso) con error</div>
+                      <div className="opacity-90">{ocrError.back}</div>
+                    </div>
+                  )}
+                  {!ocrError.back && ocrBack.rut && !backRutMatches && (
+                    <div className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                      <div className="font-bold">RUN/RUT no coincide</div>
+                      <div className="opacity-90">El RUN/RUT detectado en el reverso no coincide con el ingresado.</div>
+                    </div>
+                  )}
+                  {!ocrError.back && ocrFront.docNumber && ocrBack.docNumber && !docNumbersMatch && (
+                    <div className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                      <div className="font-bold">N° de documento no coincide</div>
+                      <div className="opacity-90">El número detectado en el reverso no coincide con el frente.</div>
                     </div>
                   )}
                   {(ocrBack.rut || ocrBack.docNumber) && (
@@ -1444,12 +1888,19 @@ export default function App() {
             <Button 
               type="submit" 
               className="w-full bg-gradient-to-r from-accent to-accent/90 hover:from-accent/90 hover:to-accent text-white py-7 text-lg shadow-2xl hover:shadow-accent/50 transition-all duration-300 font-bold rounded-2xl"
-              disabled={isSubmitting || submitted || ocrBlocksSubmit}
+              disabled={isSubmitting || submitted || ocrShouldBlockSubmit}
             >
               {isSubmitting ? 'Enviando solicitud...' : submitted ? '¡Enviado!' : 'Enviar Solicitud'}
             </Button>
-            {ocrBlocksSubmit && (
-              <p className="mt-2 text-sm text-destructive">No puedes enviar: los datos detectados en las imágenes no coinciden con los datos ingresados.</p>
+            {ocrBlocksSubmit && !ocrShouldBlockSubmit && (
+              <p className="mt-2 text-sm text-amber-700">
+                Advertencia (modo pruebas): los datos detectados por OCR no coinciden o no se detectaron; igual puedes enviar.
+              </p>
+            )}
+            {ocrShouldBlockSubmit && (
+              <p className="mt-2 text-sm text-destructive">
+                No puedes enviar: los datos detectados en las imágenes no coinciden con los datos ingresados.
+              </p>
             )}
           </div>
         </form>
