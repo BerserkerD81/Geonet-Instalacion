@@ -8,5 +8,10 @@ services:
     ports:
       - "8080:80"
     restart: unless-stopped
-    extra_hosts:
-      - "api:host-gateway"
+    networks:
+      - instalaciones_network
+
+networks:
+  instalaciones_network:
+    external: true
+    name: instalaciones_network
