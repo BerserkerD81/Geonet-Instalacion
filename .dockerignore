@@ -1,0 +1,15 @@
+node_modules
+dist
+.vite
+
+.git
+.gitignore
+
+*.log
+
+.env
+.env.*
+
+.DS_Store
+
+README.md
