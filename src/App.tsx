@@ -82,17 +82,16 @@ export default function App() {
   const [submitErrorMsg, setSubmitErrorMsg] = useState<string | null>(null);
 
   const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  const canUseInAppCamera =
+    typeof window !== 'undefined' &&
+    Boolean((window as any).isSecureContext) &&
+    Boolean(navigator?.mediaDevices?.getUserMedia);
 
   const [idFrontName, setIdFrontName] = useState<string>('');
   const [idBackName, setIdBackName] = useState<string>('');
   const [addressProofName, setAddressProofName] = useState<string>('');
   const [couponName, setCouponName] = useState<string>('');
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
-  const [ocrFront, setOcrFront] = useState<{ rut: string | null; docNumber: string | null }>({ rut: null, docNumber: null });
-  const [ocrBack, setOcrBack] = useState<{ rut: string | null; docNumber: string | null }>({ rut: null, docNumber: null });
-  const [ocrLoading, setOcrLoading] = useState<{ front: boolean; back: boolean }>({ front: false, back: false });
-  const [ocrProgress, setOcrProgress] = useState<{ front: number; back: number }>({ front: 0, back: 0 });
-  const [ocrError, setOcrError] = useState<{ front: string | null; back: string | null }>({ front: null, back: null });
 
   const [cameraOpen, setCameraOpen] = useState<null | 'front' | 'back'>(null);
   const [cameraStarting, setCameraStarting] = useState(false);
@@ -117,18 +116,18 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    if (!cameraOpen) {
-      stopCamera();
-      setCameraError(null);
-      setCameraStarting(false);
-      return;
-    }
+  const closeCamera = () => {
+    stopCamera();
+    setCameraError(null);
+    setCameraStarting(false);
+    setCameraOpen(null);
+  };
 
+  useEffect(() => {
     return () => {
       stopCamera();
     };
-  }, [cameraOpen]);
+  }, []);
 
   const getCameraErrorMessage = (e: unknown) => {
     const err = e as any;
@@ -152,6 +151,11 @@ export default function App() {
   };
 
   const openCamera = async (side: 'front' | 'back') => {
+    if (!canUseInAppCamera) {
+      toast.error('La cámara con guía requiere HTTPS o localhost. Usa “Seleccionar archivo” para abrir la cámara del teléfono.');
+      return;
+    }
+
     if (side === 'back' && !hasIdFront) {
       toast.error('Primero debes subir/tomar la foto del frente');
       return;
@@ -200,7 +204,7 @@ export default function App() {
 
     if (cameraOpen === 'back' && !hasIdFront) {
       toast.error('Primero debes subir/tomar la foto del frente');
-      setCameraOpen(null);
+      closeCamera();
       return;
     }
 
@@ -242,14 +246,12 @@ export default function App() {
     if (cameraOpen === 'front') {
       setIdFrontName(file.name);
       setValue('idFront', files as any, { shouldValidate: true });
-      void handleFileOcr('front', file);
     } else {
       setIdBackName(file.name);
       setValue('idBack', files as any, { shouldValidate: true });
-      void handleFileOcr('back', file);
     }
 
-    setCameraOpen(null);
+    closeCamera();
   };
 
   const idFrontRegister = register('idFront', {
@@ -258,7 +260,6 @@ export default function App() {
       const files = e.target.files;
       if (files && files.length > 0) {
         setIdFrontName(files[0].name);
-        void handleFileOcr('front', files[0]);
       }
     },
   });
@@ -270,13 +271,11 @@ export default function App() {
         toast.error('Primero debes subir la identificación (frente)');
         if (e?.target) e.target.value = '';
         setIdBackName('');
-        setOcrBack({ rut: null, docNumber: null });
         return;
       }
       const files = e.target.files;
       if (files && files.length > 0) {
         setIdBackName(files[0].name);
-        void handleFileOcr('back', files[0]);
       }
     },
   });
@@ -428,402 +427,6 @@ export default function App() {
     if (validateTimeRange(timeFromValue, timeToValue) === true) return;
     setValue('timeTo', '', { shouldValidate: true, shouldDirty: true });
   }, [timeFromValue, timeToValue, setValue]);
-
-
-  const normalizeForKeywordSearch = (value: string) =>
-    value
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toUpperCase();
-
-  const normalizeLooseForKeywordSearch = (value: string) =>
-    normalizeForKeywordSearch(value).replace(/[^A-Z0-9]/g, '');
-
-  const extractPreferredText = (page: any, kind: 'rut' | 'doc') => {
-    const keywords =
-      kind === 'rut'
-        ? ['RUN', 'R.U.N', 'R U N', 'RUT', 'R.U.T', 'R U T']
-        : ['NUMERO', 'N°', 'NRO', 'DOCUMENTO', 'DOC', 'NUM.'];
-
-    const lines: string[] = [];
-    const blocks = page?.blocks || [];
-    for (const b of blocks) {
-      const paragraphs = b?.paragraphs || [];
-      for (const p of paragraphs) {
-        const ls = p?.lines || [];
-        for (const l of ls) {
-          if (l?.text) lines.push(String(l.text));
-        }
-      }
-    }
-
-    const picked = lines.filter((line) => {
-      const normalized = normalizeForKeywordSearch(line);
-      const loose = normalizeLooseForKeywordSearch(line);
-      return keywords.some((k) => {
-        const kn = normalizeForKeywordSearch(k);
-        const kl = normalizeLooseForKeywordSearch(k);
-        return normalized.includes(kn) || loose.includes(kl);
-      });
-    });
-
-    const joinedPicked = picked.join('\n');
-    const full = page?.text ? String(page.text) : '';
-    return joinedPicked.trim().length > 0 ? joinedPicked : full;
-  };
-
-  const createBitmapFromFile = async (file: File) => {
-    // Try to honor EXIF orientation if the browser supports it.
-    try {
-      // imageOrientation is supported in modern browsers, but TS lib defs can vary.
-      return await createImageBitmap(file, { imageOrientation: 'from-image' } as any);
-    } catch {
-      return await createImageBitmap(file);
-    }
-  };
-
-  const preprocessImageForOcr = async (file: File, rotateDeg: 0 | 90 | 180 | 270 = 0) => {
-    if (!file.type.startsWith('image/')) return file;
-
-    const bitmap = await createBitmapFromFile(file);
-
-    const maxDim = 1600;
-    const rotated = rotateDeg === 90 || rotateDeg === 270;
-    const baseW = rotated ? bitmap.height : bitmap.width;
-    const baseH = rotated ? bitmap.width : bitmap.height;
-    const scale = Math.min(1, maxDim / Math.max(baseW, baseH));
-
-    const scaledW = Math.max(1, Math.round(bitmap.width * scale));
-    const scaledH = Math.max(1, Math.round(bitmap.height * scale));
-    const targetW = rotated ? scaledH : scaledW;
-    const targetH = rotated ? scaledW : scaledH;
-
-    const canvas = document.createElement('canvas');
-    canvas.width = targetW;
-    canvas.height = targetH;
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!ctx) return file;
-
-    ctx.save();
-    ctx.translate(targetW / 2, targetH / 2);
-    ctx.rotate((rotateDeg * Math.PI) / 180);
-    ctx.drawImage(bitmap, -scaledW / 2, -scaledH / 2, scaledW, scaledH);
-    ctx.restore();
-    bitmap.close();
-
-    const toGrayscaleContrast = (sourceCtx: CanvasRenderingContext2D, w: number, h: number) => {
-      const imageData = sourceCtx.getImageData(0, 0, w, h);
-      const data = imageData.data;
-
-      const hist = new Array<number>(256).fill(0);
-      const contrast = 1.15;
-
-      // BBox of "ink" pixels for autocrop
-      let minX = w;
-      let minY = h;
-      let maxX = 0;
-      let maxY = 0;
-      let inkCount = 0;
-      const inkThreshold = 235;
-
-      for (let y = 0; y < h; y++) {
-        for (let x = 0; x < w; x++) {
-          const i = (y * w + x) * 4;
-          const r = data[i];
-          const g = data[i + 1];
-          const b = data[i + 2];
-          let v = Math.round(0.299 * r + 0.587 * g + 0.114 * b);
-          v = Math.max(0, Math.min(255, Math.round((v - 128) * contrast + 128)));
-          hist[v]++;
-          data[i] = v;
-          data[i + 1] = v;
-          data[i + 2] = v;
-
-          if (v < inkThreshold) {
-            inkCount++;
-            if (x < minX) minX = x;
-            if (y < minY) minY = y;
-            if (x > maxX) maxX = x;
-            if (y > maxY) maxY = y;
-          }
-        }
-      }
-
-      return { imageData, hist, bbox: { minX, minY, maxX, maxY, inkCount } };
-    };
-
-    const { imageData, hist, bbox } = toGrayscaleContrast(ctx, targetW, targetH);
-    const data = imageData.data;
-
-    // Autocrop (útil cuando la cédula ocupa poco en la foto)
-    // Requiere suficiente "tinta" y un bbox razonable.
-    if (bbox.inkCount > (targetW * targetH) * 0.01) {
-      const bw = Math.max(1, bbox.maxX - bbox.minX + 1);
-      const bh = Math.max(1, bbox.maxY - bbox.minY + 1);
-      const bboxAreaRatio = (bw * bh) / (targetW * targetH);
-      if (bboxAreaRatio >= 0.08 && bboxAreaRatio <= 0.98) {
-        const padX = Math.round(bw * 0.04);
-        const padY = Math.round(bh * 0.04);
-        const sx = Math.max(0, bbox.minX - padX);
-        const sy = Math.max(0, bbox.minY - padY);
-        const sw = Math.min(targetW - sx, bw + padX * 2);
-        const sh = Math.min(targetH - sy, bh + padY * 2);
-
-        // Re-render cropped region into a new canvas, and optionally upscale.
-        const cropMaxDim = 1600;
-        const cropScale = Math.min(2, cropMaxDim / Math.max(sw, sh));
-        const outW = Math.max(1, Math.round(sw * cropScale));
-        const outH = Math.max(1, Math.round(sh * cropScale));
-
-        const croppedCanvas = document.createElement('canvas');
-        croppedCanvas.width = outW;
-        croppedCanvas.height = outH;
-        const croppedCtx = croppedCanvas.getContext('2d', { willReadFrequently: true });
-        if (croppedCtx) {
-          // Draw from original (rotated+scaled) canvas
-          croppedCtx.drawImage(canvas, sx, sy, sw, sh, 0, 0, outW, outH);
-
-          // Replace working canvas/context
-          canvas.width = outW;
-          canvas.height = outH;
-          const nextCtx = canvas.getContext('2d', { willReadFrequently: true });
-          if (nextCtx) {
-            nextCtx.drawImage(croppedCanvas, 0, 0);
-            // Recompute grayscale/hist on the cropped image
-            const recomputed = toGrayscaleContrast(nextCtx, outW, outH);
-            // copy results to current locals
-            (imageData as any).data = recomputed.imageData.data;
-            (hist as any).length = 0;
-            for (let i = 0; i < 256; i++) (hist as any).push(recomputed.hist[i]);
-            // swap data reference
-            (data as any).set?.(recomputed.imageData.data);
-          }
-        }
-      }
-    }
-
-    // Otsu threshold
-    const total = canvas.width * canvas.height;
-    let sum = 0;
-    for (let t = 0; t < 256; t++) sum += t * hist[t];
-
-    let sumB = 0;
-    let wB = 0;
-    let wF = 0;
-    let varMax = 0;
-    let threshold = 140;
-    for (let t = 0; t < 256; t++) {
-      wB += hist[t];
-      if (wB === 0) continue;
-      wF = total - wB;
-      if (wF === 0) break;
-      sumB += t * hist[t];
-      const mB = sumB / wB;
-      const mF = (sum - sumB) / wF;
-      const between = wB * wF * (mB - mF) * (mB - mF);
-      if (between > varMax) {
-        varMax = between;
-        threshold = t;
-      }
-    }
-
-    // Binarize
-    for (let i = 0; i < data.length; i += 4) {
-      const v = data[i];
-      const out = v > threshold ? 255 : 0;
-      data[i] = out;
-      data[i + 1] = out;
-      data[i + 2] = out;
-    }
-
-    // Re-read ctx after potential resize
-    const finalCtx = canvas.getContext('2d', { willReadFrequently: true });
-    if (!finalCtx) return file;
-    // Apply binarized data onto the current canvas
-    // If canvas size changed, regenerate imageData for that size.
-    const finalImageData = finalCtx.getImageData(0, 0, canvas.width, canvas.height);
-    finalImageData.data.set(imageData.data);
-    finalCtx.putImageData(finalImageData, 0, 0);
-
-    const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
-    if (!blob) return file;
-    return new File([blob], file.name.replace(/\.[^.]+$/, '') + '-ocr.png', { type: 'image/png' });
-  };
-
-  // Ejecutar OCR sobre una imagen y extraer RUN/RUT + Número de documento
-  const handleFileOcr = async (side: 'front' | 'back', file: File | null) => {
-    if (!file) return;
-
-    setOcrLoading((prev) => ({ ...prev, [side]: true }));
-    setOcrProgress((prev) => ({ ...prev, [side]: 0 }));
-    setOcrError((prev) => ({ ...prev, [side]: null }));
-    if (side === 'front') setOcrFront({ rut: null, docNumber: null });
-    if (side === 'back') setOcrBack({ rut: null, docNumber: null });
-
-    let worker: any | null = null;
-    try {
-      const { createWorker } = await import('tesseract.js');
-      worker = await createWorker('spa', undefined, {
-        logger: (m: any) => {
-          if (typeof m?.progress === 'number') {
-            setOcrProgress((prev) => ({ ...prev, [side]: Math.round(m.progress * 100) }));
-          }
-        },
-      });
-
-      await worker.load();
-      await worker.reinitialize('spa');
-      const baseParams: Record<string, string> = {
-        // Mejoras generales: DPI
-        user_defined_dpi: '300',
-        // Importante: incluir letras para detectar palabras guía (RUN/RUT/DOCUMENTO)
-        tessedit_char_whitelist: '0123456789Kk.-<ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzÑñ°/ ',
-        preserve_interword_spaces: '1',
-      };
-
-      const rutRegex =
-        /\b[0-9]{1,2}\.?[0-9]{3}\.?[0-9]{3}-\s*[0-9Kk]\b|\b[0-9]{7,8}-\s*[0-9Kk]\b|\b[0-9]{7,8}[0-9Kk]\b|\b[0-9]{7,8}\s*[<\-]\s*[0-9Kk]\b/g;
-      const docRegex = /\b\d{1,3}(?:\.\d{3}){2}\b|\b\d{8,9}\b/g;
-      const normalizeRut = (value: string) =>
-        value
-          .replace(/\s+/g, '')
-          .replace(/\./g, '')
-          .replace(/</g, '-')
-          .replace(/-?([0-9Kk])$/i, '-$1');
-      const normalizeDoc = (value: string) => value.replace(/[^0-9]/g, '');
-
-      const extractFromData = (data: any) => {
-        const rutText = extractPreferredText(data, 'rut').toUpperCase();
-        const docText = extractPreferredText(data, 'doc').toUpperCase();
-        const fallbackText = (data?.text || '').toUpperCase();
-
-        const rutCandidates = (
-          [...(rutText.match(rutRegex) || []), ...(fallbackText.match(rutRegex) || [])]
-        ).map(normalizeRut);
-        const docCandidates = (
-          [...(docText.match(docRegex) || []), ...(fallbackText.match(docRegex) || [])]
-        ).map(normalizeDoc);
-
-        const extractedRut = rutCandidates.find((r) => validateRut(r)) || rutCandidates[0] || null;
-        const extractedDoc =
-          docCandidates.find((d) => d.length === 9) ||
-          docCandidates.find((d) => d.length === 8) ||
-          docCandidates[0] ||
-          null;
-
-        return { extractedRut, extractedDoc };
-      };
-
-      const scoreResult = (rut: string | null, doc: string | null) => {
-        // Preferimos tener ambos; luego RUT válido; luego documento.
-        const rutIsValid = rut ? validateRut(rut) : false;
-        return (rut ? 10 : 0) + (doc ? 6 : 0) + (rutIsValid ? 6 : 0);
-      };
-
-      const tryRotations: Array<0 | 90 | 180 | 270> = [0, 90, 270, 180];
-      const tryPsms: Array<'6' | '11' | '4'> = ['6', '11', '4'];
-
-      let bestRut: string | null = null;
-      let bestDoc: string | null = null;
-      let bestScore = -1;
-      let bestRot: 0 | 90 | 180 | 270 = 0;
-      let bestPsm: '6' | '11' | '4' = '6';
-
-      // Nota: siempre se intenta primero respetando EXIF, luego rotaciones extra si hace falta.
-      for (const rot of tryRotations) {
-        const ocrFile = await preprocessImageForOcr(file, rot);
-
-        for (const psm of tryPsms) {
-          await worker.setParameters({ ...baseParams, tessedit_pageseg_mode: psm });
-          const result = await worker.recognize(ocrFile);
-          const { extractedRut, extractedDoc } = extractFromData(result.data);
-
-          const score = scoreResult(extractedRut, extractedDoc);
-          if (score > bestScore) {
-            bestScore = score;
-            bestRut = extractedRut;
-            bestDoc = extractedDoc;
-            bestRot = rot;
-            bestPsm = psm;
-          }
-
-          // Early exit: si ya tenemos un RUT válido, normalmente basta.
-          if (bestRut && validateRut(bestRut)) break;
-          // O si ya tenemos doc y rut (aunque el rut no esté validado todavía)
-          if (bestRut && bestDoc) break;
-        }
-
-        if (bestRut && validateRut(bestRut)) break; // suficiente en muchos casos
-        if (bestRut && bestDoc) break;
-      }
-
-      const extractedRut = bestRut;
-      const extractedDoc = bestDoc;
-
-      if (!extractedRut && !extractedDoc) {
-        setOcrError((prev) => ({
-          ...prev,
-          [side]: 'No se pudo leer texto en la imagen. Intenta con mejor luz y, si está girada, súbela en posición correcta.',
-        }));
-      }
-
-      if (side === 'front') setOcrFront({ rut: extractedRut, docNumber: extractedDoc });
-      if (side === 'back') setOcrBack({ rut: extractedRut, docNumber: extractedDoc });
-
-      // Log para depuración: datos detectados por OCR
-      try {
-        const currentCi = watch('ci') || '';
-        const rutMatchesCi = extractedRut && cleanRut(currentCi) ? cleanRut(extractedRut) === cleanRut(currentCi) : null;
-        const otherSide = side === 'front' ? 'back' : 'front';
-        const otherData = side === 'front' ? ocrBack : ocrFront;
-        const docMatchesOther =
-          extractedDoc && otherData.docNumber ? normalizeDoc(extractedDoc) === normalizeDoc(otherData.docNumber) : null;
-
-        console.log('[OCR]', {
-          side,
-          bestRot,
-          bestPsm,
-          extractedRut,
-          extractedDoc,
-          bestScore,
-          ciEntered: currentCi || null,
-          rutMatchesCi,
-          otherSide,
-          otherDocNumber: otherData.docNumber,
-          docMatchesOther,
-        });
-      } catch {
-        // ignore logging issues
-      }
-
-      const currentCi = watch('ci') || '';
-      if (extractedRut && cleanRut(currentCi) && cleanRut(extractedRut) !== cleanRut(currentCi)) {
-        toast.error(`El RUN/RUT detectado en el ${side === 'front' ? 'frente' : 'reverso'} no coincide con el RUN/RUT ingresado`);
-      }
-
-      const other = side === 'front' ? ocrBack : ocrFront;
-      if (extractedDoc && other.docNumber) {
-        if (normalizeDoc(extractedDoc) !== normalizeDoc(other.docNumber)) {
-          toast.error('El Número de documento detectado no coincide entre frente y reverso');
-        }
-      }
-    } catch (err) {
-      console.error('OCR error', err);
-      toast.error('No se pudo procesar la imagen');
-      setOcrError((prev) => ({
-        ...prev,
-        [side]: 'Error procesando OCR. Intenta nuevamente con una foto más nítida.',
-      }));
-    } finally {
-      try {
-        await worker?.terminate?.();
-      } catch {
-        // ignore
-      }
-      setOcrLoading((prev) => ({ ...prev, [side]: false }));
-      setOcrProgress((prev) => ({ ...prev, [side]: 0 }));
-    }
-  };
 
 
   // Helpers para RUT (formato y validación)
@@ -985,16 +588,7 @@ export default function App() {
     }
   };
 
-  const ciValue = watch('ci') || '';
-  const frontRutMatches = !ocrFront.rut || cleanRut(ciValue) === cleanRut(ocrFront.rut);
-  const backRutMatches = !ocrBack.rut || cleanRut(ciValue) === cleanRut(ocrBack.rut);
-  const docNumbersMatch = !ocrFront.docNumber || !ocrBack.docNumber || ocrFront.docNumber === ocrBack.docNumber;
-  const ocrBlocksSubmit = !frontRutMatches || !backRutMatches || !docNumbersMatch;
-
-  // En modo pruebas no bloqueamos el envío por OCR.
-  // Para activar bloqueo en producción: setear VITE_ENFORCE_OCR_MATCH=true
-  const enforceOcrMatch = String((import.meta as any)?.env?.VITE_ENFORCE_OCR_MATCH ?? '').toLowerCase() === 'true';
-  const ocrShouldBlockSubmit = enforceOcrMatch && ocrBlocksSubmit;
+  // Validaciones automáticas por documentos eliminadas (modo pruebas).
 
   // Hook para combinar refs (React Hook Form + useRef de Google Maps)
   const { ref: addressHookRef, ...addressRest } = register('address', { required: 'Este campo es requerido' });
@@ -1076,7 +670,7 @@ export default function App() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => setCameraOpen(null)}
+                    onClick={() => closeCamera()}
                     className="text-gray-600 hover:text-gray-900 text-xl leading-none"
                     aria-label="Cerrar"
                   >
@@ -1131,7 +725,7 @@ export default function App() {
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => setCameraOpen(null)}
+                    onClick={() => closeCamera()}
                     className="flex-1"
                   >
                     Cancelar
@@ -1503,7 +1097,7 @@ export default function App() {
                       {idFrontName ? 'Cambiar archivo' : 'Seleccionar archivo'}
                     </label>
                   </div>
-                  {isMobile && (
+                  {isMobile && canUseInAppCamera && (
                     <Button
                       type="button"
                       variant="outline"
@@ -1513,48 +1107,16 @@ export default function App() {
                       Tomar foto (con guía)
                     </Button>
                   )}
+                  {isMobile && !canUseInAppCamera && (
+                    <p className="text-xs text-gray-500">
+                      La cámara con guía requiere HTTPS. Usa “Seleccionar archivo” para abrir la cámara.
+                    </p>
+                  )}
                   {errors.idFront && (
                     <p className="text-sm text-destructive flex items-center gap-1">
                       <span className="w-1 h-1 bg-destructive rounded-full"></span>
                       {errors.idFront.message}
                     </p>
-                  )}
-                  {ocrLoading.front && (
-                    <div className="flex items-center gap-3">
-                      <p className="text-xs text-gray-500">Procesando imagen para OCR...</p>
-                      <div className="flex-1 h-2 bg-gray-200 rounded overflow-hidden">
-                        <div className="h-2 bg-accent" style={{ width: `${ocrProgress.front}%` }} />
-                      </div>
-                      <span className="text-xs text-gray-500">{ocrProgress.front}%</span>
-                    </div>
-                  )}
-                  {ocrError.front && (
-                    <div className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                      <div className="font-bold">OCR (Frente) con error</div>
-                      <div className="opacity-90">{ocrError.front}</div>
-                    </div>
-                  )}
-                  {!ocrError.front && ocrFront.rut && !frontRutMatches && (
-                    <div className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                      <div className="font-bold">RUN/RUT no coincide</div>
-                      <div className="opacity-90">El RUN/RUT detectado en el frente no coincide con el ingresado.</div>
-                    </div>
-                  )}
-                  {!ocrError.front && ocrFront.docNumber && ocrBack.docNumber && !docNumbersMatch && (
-                    <div className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                      <div className="font-bold">N° de documento no coincide</div>
-                      <div className="opacity-90">El número detectado en el frente no coincide con el reverso.</div>
-                    </div>
-                  )}
-                  {(ocrFront.rut || ocrFront.docNumber) && (
-                    <div className="space-y-1">
-                      {ocrFront.rut && (
-                        <p className={`text-sm ${frontRutMatches ? 'text-accent' : 'text-destructive'}`}>RUN/RUT detectado: {ocrFront.rut} {frontRutMatches ? '— coincide con el ingresado' : '— no coincide con el ingresado'}</p>
-                      )}
-                      {ocrFront.docNumber && (
-                        <p className={`text-sm ${docNumbersMatch ? 'text-accent' : 'text-destructive'}`}>N° documento detectado: {ocrFront.docNumber}{ocrBack.docNumber ? (docNumbersMatch ? ' — coincide con el reverso' : ' — no coincide con el reverso') : ''}</p>
-                      )}
-                    </div>
                   )}
                 </div>
 
@@ -1603,7 +1165,7 @@ export default function App() {
                   {!hasIdFront && (
                     <p className="text-xs text-gray-500">Primero sube el frente para habilitar el reverso.</p>
                   )}
-                  {isMobile && (
+                  {isMobile && canUseInAppCamera && (
                     <Button
                       type="button"
                       variant="outline"
@@ -1620,48 +1182,16 @@ export default function App() {
                       Tomar foto (con guía)
                     </Button>
                   )}
+                  {isMobile && !canUseInAppCamera && (
+                    <p className="text-xs text-gray-500">
+                      La cámara con guía requiere HTTPS. Usa “Seleccionar archivo” para abrir la cámara.
+                    </p>
+                  )}
                   {errors.idBack && (
                     <p className="text-sm text-destructive flex items-center gap-1">
                       <span className="w-1 h-1 bg-destructive rounded-full"></span>
                       {errors.idBack.message}
                     </p>
-                  )}
-                  {ocrLoading.back && (
-                    <div className="flex items-center gap-3">
-                      <p className="text-xs text-gray-500">Procesando imagen para OCR...</p>
-                      <div className="flex-1 h-2 bg-gray-200 rounded overflow-hidden">
-                        <div className="h-2 bg-accent" style={{ width: `${ocrProgress.back}%` }} />
-                      </div>
-                      <span className="text-xs text-gray-500">{ocrProgress.back}%</span>
-                    </div>
-                  )}
-                  {ocrError.back && (
-                    <div className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                      <div className="font-bold">OCR (Reverso) con error</div>
-                      <div className="opacity-90">{ocrError.back}</div>
-                    </div>
-                  )}
-                  {!ocrError.back && ocrBack.rut && !backRutMatches && (
-                    <div className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                      <div className="font-bold">RUN/RUT no coincide</div>
-                      <div className="opacity-90">El RUN/RUT detectado en el reverso no coincide con el ingresado.</div>
-                    </div>
-                  )}
-                  {!ocrError.back && ocrFront.docNumber && ocrBack.docNumber && !docNumbersMatch && (
-                    <div className="rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-                      <div className="font-bold">N° de documento no coincide</div>
-                      <div className="opacity-90">El número detectado en el reverso no coincide con el frente.</div>
-                    </div>
-                  )}
-                  {(ocrBack.rut || ocrBack.docNumber) && (
-                    <div className="space-y-1">
-                      {ocrBack.rut && (
-                        <p className={`text-sm ${backRutMatches ? 'text-accent' : 'text-destructive'}`}>RUN/RUT detectado: {ocrBack.rut} {backRutMatches ? '— coincide con el ingresado' : '— no coincide con el ingresado'}</p>
-                      )}
-                      {ocrBack.docNumber && (
-                        <p className={`text-sm ${docNumbersMatch ? 'text-accent' : 'text-destructive'}`}>N° documento detectado: {ocrBack.docNumber}{ocrFront.docNumber ? (docNumbersMatch ? ' — coincide con el frente' : ' — no coincide con el frente') : ''}</p>
-                      )}
-                    </div>
                   )}
                 </div>
 
@@ -1888,20 +1418,10 @@ export default function App() {
             <Button 
               type="submit" 
               className="w-full bg-gradient-to-r from-accent to-accent/90 hover:from-accent/90 hover:to-accent text-white py-7 text-lg shadow-2xl hover:shadow-accent/50 transition-all duration-300 font-bold rounded-2xl"
-              disabled={isSubmitting || submitted || ocrShouldBlockSubmit}
+              disabled={isSubmitting || submitted}
             >
               {isSubmitting ? 'Enviando solicitud...' : submitted ? '¡Enviado!' : 'Enviar Solicitud'}
             </Button>
-            {ocrBlocksSubmit && !ocrShouldBlockSubmit && (
-              <p className="mt-2 text-sm text-amber-700">
-                Advertencia (modo pruebas): los datos detectados por OCR no coinciden o no se detectaron; igual puedes enviar.
-              </p>
-            )}
-            {ocrShouldBlockSubmit && (
-              <p className="mt-2 text-sm text-destructive">
-                No puedes enviar: los datos detectados en las imágenes no coinciden con los datos ingresados.
-              </p>
-            )}
           </div>
         </form>
       </main>
