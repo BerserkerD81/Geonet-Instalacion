@@ -82,10 +82,6 @@ export default function App() {
   const [submitErrorMsg, setSubmitErrorMsg] = useState<string | null>(null);
 
   const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  const canUseInAppCamera =
-    typeof window !== 'undefined' &&
-    Boolean((window as any).isSecureContext) &&
-    Boolean(navigator?.mediaDevices?.getUserMedia);
 
   const [idFrontName, setIdFrontName] = useState<string>('');
   const [idBackName, setIdBackName] = useState<string>('');
@@ -93,11 +89,12 @@ export default function App() {
   const [couponName, setCouponName] = useState<string>('');
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
 
-  const [cameraOpen, setCameraOpen] = useState<null | 'front' | 'back'>(null);
-  const [cameraStarting, setCameraStarting] = useState(false);
-  const [cameraError, setCameraError] = useState<string | null>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  // --- Cámara con guía (DESACTIVADA por ahora, requiere HTTPS en móvil) ---
+  // const [cameraOpen, setCameraOpen] = useState<null | 'front' | 'back'>(null);
+  // const [cameraStarting, setCameraStarting] = useState(false);
+  // const [cameraError, setCameraError] = useState<string | null>(null);
+  // const videoRef = useRef<HTMLVideoElement | null>(null);
+  // const streamRef = useRef<MediaStream | null>(null);
   const idFrontFileInputRef = useRef<HTMLInputElement | null>(null);
   const idBackFileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -106,6 +103,7 @@ export default function App() {
   const timeToValue = watch('timeTo');
   const hasIdFront = Boolean(idFrontName) || ((idFrontFiles?.length ?? 0) > 0);
 
+  /*
   const stopCamera = () => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach((t) => t.stop());
@@ -151,11 +149,6 @@ export default function App() {
   };
 
   const openCamera = async (side: 'front' | 'back') => {
-    if (!canUseInAppCamera) {
-      toast.error('La cámara con guía requiere HTTPS o localhost. Usa “Seleccionar archivo” para abrir la cámara del teléfono.');
-      return;
-    }
-
     if (side === 'back' && !hasIdFront) {
       toast.error('Primero debes subir/tomar la foto del frente');
       return;
@@ -192,6 +185,7 @@ export default function App() {
       setCameraStarting(false);
     }
   };
+  */
 
   const fileToFileList = (file: File) => {
     const dt = new DataTransfer();
@@ -199,6 +193,7 @@ export default function App() {
     return dt.files;
   };
 
+  /*
   const captureFromCamera = async () => {
     if (!cameraOpen || !videoRef.current) return;
 
@@ -253,6 +248,7 @@ export default function App() {
 
     closeCamera();
   };
+  */
 
   const idFrontRegister = register('idFront', {
     required: 'Este campo es requerido',
@@ -547,7 +543,7 @@ export default function App() {
       }
 
       // Enviar petición al servidor
-      const response = await fetch('http://localhost:3000/installations', {
+      const response = await fetch('/api/installations', {
         method: 'POST',
         body: formData,
       });
@@ -661,87 +657,91 @@ export default function App() {
             </div>
           )}
 
-          {cameraOpen && (
-            <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
-              <div className="w-full max-w-md bg-white rounded-2xl overflow-hidden shadow-2xl">
-                <div className="flex items-center justify-between px-4 py-3 border-b">
-                  <div className="font-bold text-gray-800">
-                    {cameraOpen === 'front' ? 'Tomar foto (Frente)' : 'Tomar foto (Reverso)'}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => closeCamera()}
-                    className="text-gray-600 hover:text-gray-900 text-xl leading-none"
-                    aria-label="Cerrar"
-                  >
-                    ×
-                  </button>
-                </div>
+          {/*
+            Cámara con guía (DESACTIVADA por ahora): requiere HTTPS en móviles.
+            Reactivar cuando tengas HTTPS.
 
-                <div className="relative bg-black">
-                  <video
-                    ref={videoRef}
-                    className="w-full h-[65vh] max-h-[520px] object-cover"
-                    playsInline
-                    muted
-                  />
-
-                  {(cameraStarting || cameraError) && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-white p-6">
-                      <div className="text-center space-y-3">
-                        {cameraStarting && (
-                          <div className="flex items-center justify-center gap-3">
-                            <div className="w-5 h-5 border-2 border-white/90 border-t-transparent rounded-full animate-spin" />
-                            <span className="text-sm font-semibold">Activando cámara…</span>
-                          </div>
-                        )}
-                        {cameraError && (
-                          <div className="space-y-3">
-                            <p className="text-sm">{cameraError}</p>
-                            <Button
-                              type="button"
-                              variant="outline"
-                              onClick={() => void openCamera(cameraOpen)}
-                              className="bg-white/10 border-white/30 text-white hover:bg-white/20"
-                            >
-                              Reintentar
-                            </Button>
-                          </div>
-                        )}
-                      </div>
+            {cameraOpen && (
+              <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+                <div className="w-full max-w-md bg-white rounded-2xl overflow-hidden shadow-2xl">
+                  <div className="flex items-center justify-between px-4 py-3 border-b">
+                    <div className="font-bold text-gray-800">
+                      {cameraOpen === 'front' ? 'Tomar foto (Frente)' : 'Tomar foto (Reverso)'}
                     </div>
-                  )}
-
-                  {/* Guía de encuadre */}
-                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
-                    <div className="w-[85%] aspect-[1.586/1] border-2 border-white/90 rounded-xl shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
+                    <button
+                      type="button"
+                      onClick={() => closeCamera()}
+                      className="text-gray-600 hover:text-gray-900 text-xl leading-none"
+                      aria-label="Cerrar"
+                    >
+                      ×
+                    </button>
                   </div>
-                  <div className="pointer-events-none absolute bottom-4 left-0 right-0 text-center text-white text-xs px-6">
-                    Alinea la cédula dentro del rectángulo, con buena luz.
-                  </div>
-                </div>
 
-                <div className="p-4 flex gap-3">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => closeCamera()}
-                    className="flex-1"
-                  >
-                    Cancelar
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={() => void captureFromCamera()}
-                    disabled={cameraStarting || Boolean(cameraError)}
-                    className="flex-1 bg-gradient-to-r from-accent to-accent/90 hover:from-accent/90 hover:to-accent text-white"
-                  >
-                    Capturar
-                  </Button>
+                  <div className="relative bg-black">
+                    <video
+                      ref={videoRef}
+                      className="w-full h-[65vh] max-h-[520px] object-cover"
+                      playsInline
+                      muted
+                    />
+
+                    {(cameraStarting || cameraError) && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/60 text-white p-6">
+                        <div className="text-center space-y-3">
+                          {cameraStarting && (
+                            <div className="flex items-center justify-center gap-3">
+                              <div className="w-5 h-5 border-2 border-white/90 border-t-transparent rounded-full animate-spin" />
+                              <span className="text-sm font-semibold">Activando cámara…</span>
+                            </div>
+                          )}
+                          {cameraError && (
+                            <div className="space-y-3">
+                              <p className="text-sm">{cameraError}</p>
+                              <Button
+                                type="button"
+                                variant="outline"
+                                onClick={() => void openCamera(cameraOpen)}
+                                className="bg-white/10 border-white/30 text-white hover:bg-white/20"
+                              >
+                                Reintentar
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                      <div className="w-[85%] aspect-[1.586/1] border-2 border-white/90 rounded-xl shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
+                    </div>
+                    <div className="pointer-events-none absolute bottom-4 left-0 right-0 text-center text-white text-xs px-6">
+                      Alinea la cédula dentro del rectángulo, con buena luz.
+                    </div>
+                  </div>
+
+                  <div className="p-4 flex gap-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => closeCamera()}
+                      className="flex-1"
+                    >
+                      Cancelar
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={() => void captureFromCamera()}
+                      disabled={cameraStarting || Boolean(cameraError)}
+                      className="flex-1 bg-gradient-to-r from-accent to-accent/90 hover:from-accent/90 hover:to-accent text-white"
+                    >
+                      Capturar
+                    </Button>
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
+            )}
+          */}
           {/* Información Personal */}
           <Card className="shadow-xl border-0 bg-white/80 backdrop-blur-sm overflow-hidden">
             <div className="bg-gradient-to-r from-primary to-primary/90 p-6">
@@ -1097,21 +1097,7 @@ export default function App() {
                       {idFrontName ? 'Cambiar archivo' : 'Seleccionar archivo'}
                     </label>
                   </div>
-                  {isMobile && canUseInAppCamera && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => void openCamera('front')}
-                      className="w-full h-12 border-2 border-gray-200 hover:border-accent hover:text-accent rounded-xl"
-                    >
-                      Tomar foto (con guía)
-                    </Button>
-                  )}
-                  {isMobile && !canUseInAppCamera && (
-                    <p className="text-xs text-gray-500">
-                      La cámara con guía requiere HTTPS. Usa “Seleccionar archivo” para abrir la cámara.
-                    </p>
-                  )}
+                  {/* Cámara con guía desactivada por ahora (sin HTTPS) */}
                   {errors.idFront && (
                     <p className="text-sm text-destructive flex items-center gap-1">
                       <span className="w-1 h-1 bg-destructive rounded-full"></span>
@@ -1165,28 +1151,7 @@ export default function App() {
                   {!hasIdFront && (
                     <p className="text-xs text-gray-500">Primero sube el frente para habilitar el reverso.</p>
                   )}
-                  {isMobile && canUseInAppCamera && (
-                    <Button
-                      type="button"
-                      variant="outline"
-                      onClick={() => {
-                        if (!hasIdFront) {
-                          toast.error('Primero debes subir/tomar la foto del frente');
-                          return;
-                        }
-                        void openCamera('back');
-                      }}
-                      disabled={!hasIdFront}
-                      className="w-full h-12 border-2 border-gray-200 hover:border-accent hover:text-accent rounded-xl disabled:opacity-60 disabled:cursor-not-allowed"
-                    >
-                      Tomar foto (con guía)
-                    </Button>
-                  )}
-                  {isMobile && !canUseInAppCamera && (
-                    <p className="text-xs text-gray-500">
-                      La cámara con guía requiere HTTPS. Usa “Seleccionar archivo” para abrir la cámara.
-                    </p>
-                  )}
+                  {/* Cámara con guía desactivada por ahora (sin HTTPS) */}
                   {errors.idBack && (
                     <p className="text-sm text-destructive flex items-center gap-1">
                       <span className="w-1 h-1 bg-destructive rounded-full"></span>

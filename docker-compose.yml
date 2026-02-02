@@ -8,3 +8,5 @@ services:
     ports:
       - "8080:80"
     restart: unless-stopped
+    extra_hosts:
+      - "api:host-gateway"
