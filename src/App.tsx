@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { useForm } from 'react-hook-form';
+import { Controller, useForm } from 'react-hook-form';
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
 import { Label } from './components/ui/label';
@@ -8,6 +8,7 @@ import { Card, CardContent } from './components/ui/card';
 import { MapPin, Upload, User, Phone, FileText, Image as Mail, Calendar } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion} from 'motion/react';
+import { TimeSelect } from './components/ui/time-select';
 
 // Tipos para Google Maps
 declare global {
@@ -39,10 +40,9 @@ interface FormData {
 }
 
 export default function App() {
-  const { register, handleSubmit, formState: { errors }, reset, setValue, watch } = useForm<FormData>();
+  const { register, handleSubmit, formState: { errors }, reset, setValue, watch, control } = useForm<FormData>();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
-  const [gettingLocation, setGettingLocation] = useState(false);
 
   const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
@@ -61,6 +61,11 @@ export default function App() {
   const streamRef = useRef<MediaStream | null>(null);
   const idFrontFileInputRef = useRef<HTMLInputElement | null>(null);
   const idBackFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const idFrontFiles = watch('idFront');
+  const timeFromValue = watch('timeFrom');
+  const timeToValue = watch('timeTo');
+  const hasIdFront = Boolean(idFrontName) || ((idFrontFiles?.length ?? 0) > 0);
 
   const stopCamera = () => {
     if (streamRef.current) {
@@ -110,6 +115,12 @@ export default function App() {
 
   const captureFromCamera = async () => {
     if (!cameraOpen || !videoRef.current) return;
+
+    if (cameraOpen === 'back' && !hasIdFront) {
+      toast.error('Primero debes subir/tomar la foto del frente');
+      setCameraOpen(null);
+      return;
+    }
 
     const video = videoRef.current;
     const width = video.videoWidth || 1280;
@@ -173,6 +184,13 @@ export default function App() {
   const idBackRegister = register('idBack', {
     required: 'Este campo es requerido',
     onChange: (e) => {
+      if (!hasIdFront) {
+        toast.error('Primero debes subir la identificación (frente)');
+        if (e?.target) e.target.value = '';
+        setIdBackName('');
+        setOcrBack({ rut: null, docNumber: null });
+        return;
+      }
       const files = e.target.files;
       if (files && files.length > 0) {
         setIdBackName(files[0].name);
@@ -258,29 +276,6 @@ export default function App() {
     toast.success('Dirección seleccionada', { description: 'Campos completados automáticamente.' });
   };
 
-  // Mantener reverseGeocode para el botón de "Mi ubicación actual"
-  const reverseGeocode = async (lat: number, lon: number) => {
-    try {
-      const res = await fetch(
-        `${NOMINATIM_BASE_URL}/reverse?format=json&addressdetails=1&lat=${lat}&lon=${lon}`,
-        { headers: { 'Accept-Language': 'es' } }
-      );
-      const data = await res.json();
-      const addr = data.address || {};
-      const street = [addr.road, addr.house_number].filter(Boolean).join(' ');
-
-      if (street) setValue('address', street);
-      if (addr.city || addr.town || addr.village) {
-        setValue('city', addr.city || addr.town || addr.village);
-      }
-      if (addr.neighbourhood || addr.suburb) {
-        setValue('neighborhood', addr.neighbourhood || addr.suburb);
-      }
-      if (addr.postcode) setValue('postalCode', addr.postcode);
-    } catch (e) {
-      console.error(e);
-    }
-  };
 
   const getValidDates = () => {
     const dates: {date: Date, formatted: string}[] = [];
@@ -310,32 +305,32 @@ export default function App() {
     '15:00', '15:30', '16:00', '16:30', '17:00'
   ];
 
-  const getGeolocation = () => {
-    if (!navigator.geolocation) {
-      toast.error('Geolocalización no soportada');
-      return;
-    }
-
-    setGettingLocation(true);
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        const lat = position.coords.latitude;
-        const lon = position.coords.longitude;
-        const coords = `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
-
-        setValue('coordinates', coords, { shouldValidate: true });
-        await reverseGeocode(lat, lon);
-
-        toast.success('Ubicación obtenida');
-        setGettingLocation(false);
-      },
-      (error) => {
-        console.error(error);
-        toast.error('Error al obtener ubicación');
-        setGettingLocation(false);
-      }
-    );
+  const timeToMinutes = (value: string) => {
+    const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value);
+    if (!m) return NaN;
+    return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
   };
+
+  const validateTimeRange = (from: string, to: string) => {
+    if (!from || !to) return true;
+    const fromMin = timeToMinutes(from);
+    const toMin = timeToMinutes(to);
+    if (!Number.isFinite(fromMin) || !Number.isFinite(toMin)) return true;
+    return fromMin < toMin ? true : 'La hora "Desde" debe ser menor que "Hasta"';
+  };
+
+  const filteredTimeToOptions =
+    timeFromValue && Number.isFinite(timeToMinutes(timeFromValue))
+      ? timeOptions.filter((t) => timeToMinutes(t) > timeToMinutes(timeFromValue))
+      : timeOptions;
+
+  useEffect(() => {
+    if (!timeFromValue) return;
+    if (!timeToValue) return;
+    if (validateTimeRange(timeFromValue, timeToValue) === true) return;
+    setValue('timeTo', '', { shouldValidate: true, shouldDirty: true });
+  }, [timeFromValue, timeToValue, setValue]);
+
 
   const normalizeForKeywordSearch = (value: string) =>
     value
@@ -504,6 +499,25 @@ export default function App() {
       // Validar que se hayan seleccionado fechas
       if (selectedDates.length === 0) {
         toast.error('Debes seleccionar al menos una fecha de instalación');
+        setIsSubmitting(false);
+        return;
+      }
+
+      const timeValid = validateTimeRange(data.timeFrom, data.timeTo);
+      if (timeValid !== true) {
+        toast.error(String(timeValid));
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (!data.idFront || data.idFront.length === 0) {
+        toast.error('Debes subir la identificación (frente)');
+        setIsSubmitting(false);
+        return;
+      }
+
+      if (data.idBack && data.idBack.length > 0 && !data.idFront?.length) {
+        toast.error('No puedes subir el reverso sin el frente');
         setIsSubmitting(false);
         return;
       }
@@ -842,32 +856,18 @@ export default function App() {
                   <div className="w-1.5 h-1.5 bg-accent rounded-full"></div>
                   Coordenadas GPS <span className="text-accent">*</span>
                 </Label>
-                <div className="flex gap-2">
-                  <div className="flex-1">
-                    <Input
-                      id="coordinates"
-                      placeholder="-17.783299, -63.182140"
-                      {...register('coordinates', { 
-                        required: 'Este campo es requerido',
-                        pattern: {
-                          value: /^-?\d+\.?\d*\s*,\s*-?\d+\.?\d*$/,
-                          message: 'Formato inválido (usar: lat,lng)'
-                        }
-                      })}
-                      className="h-12 border-2 border-gray-200 focus:border-accent focus:ring-accent/20 rounded-xl transition-all"
-                    />
-                  </div>
-                  <Button 
-                    type="button" 
-                    variant="outline" 
-                    onClick={getGeolocation}
-                    disabled={gettingLocation}
-                    className="h-12 px-4 border-2 border-gray-200 hover:border-accent hover:text-accent rounded-xl"
-                    title="Usar mi ubicación actual"
-                  >
-                    {gettingLocation ? <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div> : <MapPin className="w-5 h-5" />}
-                  </Button>
-                </div>
+                <Input
+                  id="coordinates"
+                  placeholder="-17.783299, -63.182140"
+                  {...register('coordinates', {
+                    required: 'Este campo es requerido',
+                    pattern: {
+                      value: /^-?\d+\.?\d*\s*,\s*-?\d+\.?\d*$/,
+                      message: 'Formato inválido (usar: lat,lng)'
+                    }
+                  })}
+                  className="h-12 border-2 border-gray-200 focus:border-accent focus:ring-accent/20 rounded-xl transition-all"
+                />
                 {errors.coordinates && (
                   <p className="text-sm text-destructive flex items-center gap-1">
                     <span className="w-1 h-1 bg-destructive rounded-full"></span>
@@ -1092,6 +1092,7 @@ export default function App() {
                       type="file"
                       accept="image/*"
                       capture="environment"
+                      disabled={!hasIdFront}
                       {...idBackRegister}
                       ref={(el) => {
                         idBackRegister.ref(el);
@@ -1101,23 +1102,42 @@ export default function App() {
                     />
                     <label
                       htmlFor="idBack"
-                      onClick={() => {
+                      onClick={(e) => {
+                        if (!hasIdFront) {
+                          e.preventDefault();
+                          toast.error('Primero debes subir la identificación (frente)');
+                          return;
+                        }
                         if (idBackFileInputRef.current) {
                           idBackFileInputRef.current.value = '';
                         }
                       }}
-                      className="flex items-center justify-center gap-3 h-14 bg-gradient-to-r from-accent to-accent/90 hover:from-accent/90 hover:to-accent text-white rounded-xl cursor-pointer transition-all duration-200 shadow-md hover:shadow-lg font-semibold"
+                      className={
+                        hasIdFront
+                          ? 'flex items-center justify-center gap-3 h-14 bg-gradient-to-r from-accent to-accent/90 hover:from-accent/90 hover:to-accent text-white rounded-xl cursor-pointer transition-all duration-200 shadow-md hover:shadow-lg font-semibold'
+                          : 'flex items-center justify-center gap-3 h-14 bg-gray-200 text-gray-500 rounded-xl cursor-not-allowed transition-all duration-200 font-semibold'
+                      }
                     >
                       <Upload className="w-5 h-5" />
                       {idBackName ? 'Cambiar archivo' : 'Seleccionar archivo'}
                     </label>
                   </div>
+                  {!hasIdFront && (
+                    <p className="text-xs text-gray-500">Primero sube el frente para habilitar el reverso.</p>
+                  )}
                   {isMobile && (
                     <Button
                       type="button"
                       variant="outline"
-                      onClick={() => setCameraOpen('back')}
-                      className="w-full h-12 border-2 border-gray-200 hover:border-accent hover:text-accent rounded-xl"
+                      onClick={() => {
+                        if (!hasIdFront) {
+                          toast.error('Primero debes subir/tomar la foto del frente');
+                          return;
+                        }
+                        setCameraOpen('back');
+                      }}
+                      disabled={!hasIdFront}
+                      className="w-full h-12 border-2 border-gray-200 hover:border-accent hover:text-accent rounded-xl disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                       Tomar foto (con guía)
                     </Button>
@@ -1254,8 +1274,8 @@ export default function App() {
           </Card>
 
            {/* Fecha y Horario */}
-           <Card className="shadow-xl border-0 bg-white/80 backdrop-blur-sm overflow-hidden">
-            <div className="bg-gradient-to-r from-accent to-accent/90 p-6">
+           <Card className="shadow-xl border-0 bg-white/80 backdrop-blur-sm">
+            <div className="bg-gradient-to-r from-accent to-accent/90 p-6 rounded-t-xl">
               <div className="flex items-center gap-3 text-white">
                 <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-xl flex items-center justify-center">
                   <Calendar className="w-6 h-6" />
@@ -1304,31 +1324,64 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2.5">
                   <Label htmlFor="timeFrom" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 bg-accent rounded-full"></div>
-                    Desde <span className="text-accent">*</span>
+                    <div className="w-1.5 h-1.5 bg-primary rounded-full"></div>
+                    Desde <span className="text-primary">*</span>
                   </Label>
-                  <select
-                    id="timeFrom"
-                    {...register('timeFrom', { required: 'Este campo es requerido' })}
-                    className="h-12 w-full pl-3 pr-3 border-2 border-gray-200 bg-white rounded-xl focus:border-accent focus:ring-2 focus:ring-accent/20 focus:outline-none transition-all"
-                  >
-                    <option value="">Seleccionar hora</option>
-                    {timeOptions.map(time => <option key={time} value={time}>{time}</option>)}
-                  </select>
+                  <Controller
+                    name="timeFrom"
+                    control={control}
+                    rules={{
+                      required: 'Este campo es requerido',
+                      validate: (v) => validateTimeRange(v, timeToValue || ''),
+                    }}
+                    render={({ field }) => (
+                      <TimeSelect
+                        id="timeFrom"
+                        tone="primary"
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        options={timeOptions}
+                        placeholder="Seleccionar hora"
+                      />
+                    )}
+                  />
+                  {errors.timeFrom && (
+                    <p className="text-sm text-destructive flex items-center gap-1">
+                      <span className="w-1 h-1 bg-destructive rounded-full"></span>
+                      {errors.timeFrom.message}
+                    </p>
+                  )}
                 </div>
                 <div className="space-y-2.5">
                   <Label htmlFor="timeTo" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                     <div className="w-1.5 h-1.5 bg-accent rounded-full"></div>
                     Hasta <span className="text-accent">*</span>
                   </Label>
-                  <select
-                    id="timeTo"
-                    {...register('timeTo', { required: 'Este campo es requerido' })}
-                    className="h-12 w-full pl-3 pr-3 border-2 border-gray-200 bg-white rounded-xl focus:border-accent focus:ring-2 focus:ring-accent/20 focus:outline-none transition-all"
-                  >
-                    <option value="">Seleccionar hora</option>
-                    {timeOptions.map(time => <option key={time} value={time}>{time}</option>)}
-                  </select>
+                  <Controller
+                    name="timeTo"
+                    control={control}
+                    rules={{
+                      required: 'Este campo es requerido',
+                      validate: (v) => validateTimeRange(timeFromValue || '', v),
+                    }}
+                    render={({ field }) => (
+                      <TimeSelect
+                        id="timeTo"
+                        tone="accent"
+                        disabled={!timeFromValue}
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        options={filteredTimeToOptions}
+                        placeholder={timeFromValue ? 'Seleccionar hora' : 'Selecciona "Desde" primero'}
+                      />
+                    )}
+                  />
+                  {errors.timeTo && (
+                    <p className="text-sm text-destructive flex items-center gap-1">
+                      <span className="w-1 h-1 bg-destructive rounded-full"></span>
+                      {errors.timeTo.message}
+                    </p>
+                  )}
                 </div>
               </div>
             </CardContent>
