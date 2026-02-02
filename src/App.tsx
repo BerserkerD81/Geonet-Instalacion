@@ -5,7 +5,7 @@ import { Input } from './components/ui/input';
 import { Label } from './components/ui/label';
 import { Textarea } from './components/ui/textarea';
 import { Card, CardContent } from './components/ui/card';
-import { MapPin, Upload, Check, User, Phone, FileText, Image as Mail, Calendar, Clock } from 'lucide-react';
+import { MapPin, Upload, User, Phone, FileText, Image as Mail, Calendar } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion} from 'motion/react';
 
@@ -44,11 +44,142 @@ export default function App() {
   const [submitted, setSubmitted] = useState(false);
   const [gettingLocation, setGettingLocation] = useState(false);
 
+  const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
   const [idFrontName, setIdFrontName] = useState<string>('');
   const [idBackName, setIdBackName] = useState<string>('');
   const [addressProofName, setAddressProofName] = useState<string>('');
   const [couponName, setCouponName] = useState<string>('');
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
+  const [ocrFront, setOcrFront] = useState<{ rut: string | null; docNumber: string | null }>({ rut: null, docNumber: null });
+  const [ocrBack, setOcrBack] = useState<{ rut: string | null; docNumber: string | null }>({ rut: null, docNumber: null });
+  const [ocrLoading, setOcrLoading] = useState<{ front: boolean; back: boolean }>({ front: false, back: false });
+  const [ocrProgress, setOcrProgress] = useState<{ front: number; back: number }>({ front: 0, back: 0 });
+
+  const [cameraOpen, setCameraOpen] = useState<null | 'front' | 'back'>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const idFrontFileInputRef = useRef<HTMLInputElement | null>(null);
+  const idBackFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+    }
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+  };
+
+  useEffect(() => {
+    const startCamera = async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: { ideal: 'environment' } },
+          audio: false,
+        });
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          await videoRef.current.play();
+        }
+      } catch (e) {
+        console.error(e);
+        toast.error('No se pudo acceder a la cámara');
+        setCameraOpen(null);
+      }
+    };
+
+    if (cameraOpen) {
+      void startCamera();
+    } else {
+      stopCamera();
+    }
+
+    return () => {
+      stopCamera();
+    };
+  }, [cameraOpen]);
+
+  const fileToFileList = (file: File) => {
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    return dt.files;
+  };
+
+  const captureFromCamera = async () => {
+    if (!cameraOpen || !videoRef.current) return;
+
+    const video = videoRef.current;
+    const width = video.videoWidth || 1280;
+    const height = video.videoHeight || 720;
+
+    // Recorte basado en el rectángulo guía (mismas proporciones y centrado)
+    const GUIDE_WIDTH_RATIO = 0.85;
+    const ID_CARD_ASPECT = 1.586; // ancho / alto (aprox. tarjeta)
+
+    let cropW = Math.round(width * GUIDE_WIDTH_RATIO);
+    let cropH = Math.round(cropW / ID_CARD_ASPECT);
+
+    // Si por altura no cabe, ajustar por altura y recalcular ancho
+    const maxH = Math.round(height * 0.85);
+    if (cropH > maxH) {
+      cropH = maxH;
+      cropW = Math.round(cropH * ID_CARD_ASPECT);
+    }
+
+    // Centrado
+    const sx = Math.max(0, Math.round((width - cropW) / 2));
+    const sy = Math.max(0, Math.round((height - cropH) / 2));
+
+    const canvas = document.createElement('canvas');
+    canvas.width = cropW;
+    canvas.height = cropH;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+
+    const blob: Blob | null = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
+    if (!blob) return;
+
+    const file = new File([blob], `${cameraOpen === 'front' ? 'id-front' : 'id-back'}.jpg`, { type: 'image/jpeg' });
+    const files = fileToFileList(file);
+
+    if (cameraOpen === 'front') {
+      setIdFrontName(file.name);
+      setValue('idFront', files as any, { shouldValidate: true });
+      void handleFileOcr('front', file);
+    } else {
+      setIdBackName(file.name);
+      setValue('idBack', files as any, { shouldValidate: true });
+      void handleFileOcr('back', file);
+    }
+
+    setCameraOpen(null);
+  };
+
+  const idFrontRegister = register('idFront', {
+    required: 'Este campo es requerido',
+    onChange: (e) => {
+      const files = e.target.files;
+      if (files && files.length > 0) {
+        setIdFrontName(files[0].name);
+        void handleFileOcr('front', files[0]);
+      }
+    },
+  });
+
+  const idBackRegister = register('idBack', {
+    required: 'Este campo es requerido',
+    onChange: (e) => {
+      const files = e.target.files;
+      if (files && files.length > 0) {
+        setIdBackName(files[0].name);
+        void handleFileOcr('back', files[0]);
+      }
+    },
+  });
 
   // Referencia para el input de dirección y la instancia de Autocomplete
   const addressInputRef = useRef<HTMLInputElement | null>(null);
@@ -206,6 +337,147 @@ export default function App() {
     );
   };
 
+  const normalizeForKeywordSearch = (value: string) =>
+    value
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase();
+
+  const extractPreferredText = (page: any, kind: 'rut' | 'doc') => {
+    const keywords =
+      kind === 'rut'
+        ? ['RUN', 'RUT', 'R.U.T']
+        : ['NUMERO', 'N°', 'NRO', 'DOCUMENTO', 'DOC', 'NUM.'];
+
+    const lines: string[] = [];
+    const blocks = page?.blocks || [];
+    for (const b of blocks) {
+      const paragraphs = b?.paragraphs || [];
+      for (const p of paragraphs) {
+        const ls = p?.lines || [];
+        for (const l of ls) {
+          if (l?.text) lines.push(String(l.text));
+        }
+      }
+    }
+
+    const picked = lines.filter((line) => {
+      const normalized = normalizeForKeywordSearch(line);
+      return keywords.some((k) => normalized.includes(normalizeForKeywordSearch(k)));
+    });
+
+    const joinedPicked = picked.join('\n');
+    const full = page?.text ? String(page.text) : '';
+    return joinedPicked.trim().length > 0 ? joinedPicked : full;
+  };
+
+  // Ejecutar OCR sobre una imagen y extraer RUN/RUT + Número de documento
+  const handleFileOcr = async (side: 'front' | 'back', file: File | null) => {
+    if (!file) return;
+
+    setOcrLoading((prev) => ({ ...prev, [side]: true }));
+    setOcrProgress((prev) => ({ ...prev, [side]: 0 }));
+    if (side === 'front') setOcrFront({ rut: null, docNumber: null });
+    if (side === 'back') setOcrBack({ rut: null, docNumber: null });
+
+    try {
+      const { createWorker } = await import('tesseract.js');
+      const worker = await createWorker('spa', undefined, {
+        logger: (m: any) => {
+          if (typeof m?.progress === 'number') {
+            setOcrProgress((prev) => ({ ...prev, [side]: Math.round(m.progress * 100) }));
+          }
+        },
+      });
+
+      await worker.load();
+      await worker.reinitialize('spa');
+      await worker.setParameters({
+        // Aumenta la precisión para RUN/RUT y números de documento
+        tessedit_char_whitelist: '0123456789Kk.-',
+        preserve_interword_spaces: '1',
+      });
+
+      const { data } = await worker.recognize(file);
+      await worker.terminate();
+
+      const rutText = extractPreferredText(data, 'rut').toUpperCase();
+      const docText = extractPreferredText(data, 'doc').toUpperCase();
+      const fallbackText = (data?.text || '').toUpperCase();
+
+      const rutRegex = /\b[0-9]{1,2}\.?[0-9]{3}\.?[0-9]{3}-\s*[0-9Kk]\b|\b[0-9]{7,8}-\s*[0-9Kk]\b|\b[0-9]{7,8}[0-9Kk]\b/g;
+      const docRegex = /\b\d{1,3}(?:\.\d{3}){2}\b|\b\d{9}\b/g;
+
+      const normalizeRut = (value: string) => value.replace(/\s+/g, '').replace(/\./g, '').replace(/-?([0-9Kk])$/i, '-$1');
+      const normalizeDoc = (value: string) => value.replace(/[^0-9]/g, '');
+
+      const rutCandidates = (
+        [...(rutText.match(rutRegex) || []), ...(fallbackText.match(rutRegex) || [])]
+      ).map(normalizeRut);
+      const docCandidates = (
+        [...(docText.match(docRegex) || []), ...(fallbackText.match(docRegex) || [])]
+      ).map(normalizeDoc);
+
+      const extractedRut = rutCandidates.find((r) => validateRut(r)) || rutCandidates[0] || null;
+      const extractedDoc = docCandidates.find((d) => d.length === 9) || docCandidates[0] || null;
+
+      if (side === 'front') setOcrFront({ rut: extractedRut, docNumber: extractedDoc });
+      if (side === 'back') setOcrBack({ rut: extractedRut, docNumber: extractedDoc });
+
+      const currentCi = watch('ci') || '';
+      if (extractedRut && cleanRut(currentCi) && cleanRut(extractedRut) !== cleanRut(currentCi)) {
+        toast.error(`El RUN/RUT detectado en el ${side === 'front' ? 'frente' : 'reverso'} no coincide con el RUN/RUT ingresado`);
+      }
+
+      const other = side === 'front' ? ocrBack : ocrFront;
+      if (extractedDoc && other.docNumber) {
+        if (normalizeDoc(extractedDoc) !== normalizeDoc(other.docNumber)) {
+          toast.error('El Número de documento detectado no coincide entre frente y reverso');
+        }
+      }
+    } catch (err) {
+      console.error('OCR error', err);
+      toast.error('No se pudo procesar la imagen');
+    } finally {
+      setOcrLoading((prev) => ({ ...prev, [side]: false }));
+      setOcrProgress((prev) => ({ ...prev, [side]: 0 }));
+    }
+  };
+
+
+  // Helpers para RUT (formato y validación)
+  const cleanRut = (rut: string) => rut.replace(/[^0-9kK]/g, '').toUpperCase();
+
+  const formatRut = (rut: string) => {
+    const cleaned = cleanRut(rut);
+    if (!cleaned) return '';
+    const dv = cleaned.length > 1 ? cleaned.slice(-1) : '';
+    let body = cleaned.length > 1 ? cleaned.slice(0, -1) : cleaned;
+    // Evitar eliminar ceros significativos en entradas parciales
+    body = body.replace(/^0+/, '') || body;
+    // Agregar puntos de miles
+    const reversed = body.split('').reverse().join('');
+    const groups = reversed.match(/.{1,3}/g) || [];
+    const withDots = groups.join('.').split('').reverse().join('');
+    return dv ? `${withDots}-${dv}` : withDots;
+  };
+
+  const validateRut = (rut: string) => {
+    const cleaned = cleanRut(rut);
+    if (cleaned.length < 2) return false;
+    const dv = cleaned.slice(-1);
+    const numbers = cleaned.slice(0, -1).split('').reverse();
+    let sum = 0;
+    let mul = 2;
+    for (const n of numbers) {
+      sum += parseInt(n, 10) * mul;
+      mul = mul === 7 ? 2 : mul + 1;
+    }
+    const res = 11 - (sum % 11);
+    const computedDv = res === 11 ? '0' : res === 10 ? 'K' : String(res);
+    return computedDv === dv.toUpperCase();
+  };
+
   const toggleDate = (dateStr: string) => {
     if (selectedDates.includes(dateStr)) {
       setSelectedDates(selectedDates.filter(d => d !== dateStr));
@@ -311,6 +583,12 @@ export default function App() {
     }
   };
 
+  const ciValue = watch('ci') || '';
+  const frontRutMatches = !ocrFront.rut || cleanRut(ciValue) === cleanRut(ocrFront.rut);
+  const backRutMatches = !ocrBack.rut || cleanRut(ciValue) === cleanRut(ocrBack.rut);
+  const docNumbersMatch = !ocrFront.docNumber || !ocrBack.docNumber || ocrFront.docNumber === ocrBack.docNumber;
+  const ocrBlocksSubmit = !frontRutMatches || !backRutMatches || !docNumbersMatch;
+
   // Hook para combinar refs (React Hook Form + useRef de Google Maps)
   const { ref: addressHookRef, ...addressRest } = register('address', { required: 'Este campo es requerido' });
 
@@ -342,6 +620,60 @@ export default function App() {
         </div>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+          {cameraOpen && (
+            <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4">
+              <div className="w-full max-w-md bg-white rounded-2xl overflow-hidden shadow-2xl">
+                <div className="flex items-center justify-between px-4 py-3 border-b">
+                  <div className="font-bold text-gray-800">
+                    {cameraOpen === 'front' ? 'Tomar foto (Frente)' : 'Tomar foto (Reverso)'}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setCameraOpen(null)}
+                    className="text-gray-600 hover:text-gray-900 text-xl leading-none"
+                    aria-label="Cerrar"
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div className="relative bg-black">
+                  <video
+                    ref={videoRef}
+                    className="w-full h-[65vh] max-h-[520px] object-cover"
+                    playsInline
+                    muted
+                  />
+
+                  {/* Guía de encuadre */}
+                  <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+                    <div className="w-[85%] aspect-[1.586/1] border-2 border-white/90 rounded-xl shadow-[0_0_0_9999px_rgba(0,0,0,0.35)]" />
+                  </div>
+                  <div className="pointer-events-none absolute bottom-4 left-0 right-0 text-center text-white text-xs px-6">
+                    Alinea la cédula dentro del rectángulo, con buena luz.
+                  </div>
+                </div>
+
+                <div className="p-4 flex gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setCameraOpen(null)}
+                    className="flex-1"
+                  >
+                    Cancelar
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => void captureFromCamera()}
+                    className="flex-1 bg-gradient-to-r from-accent to-accent/90 hover:from-accent/90 hover:to-accent text-white"
+                  >
+                    Capturar
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
           {/* Información Personal */}
           <Card className="shadow-xl border-0 bg-white/80 backdrop-blur-sm overflow-hidden">
             <div className="bg-gradient-to-r from-primary to-primary/90 p-6">
@@ -401,12 +733,22 @@ export default function App() {
                     <div className="w-1.5 h-1.5 bg-accent rounded-full"></div>
                     Cédula de Identidad <span className="text-accent">*</span>
                   </Label>
-                  <Input
-                    id="ci"
-                    placeholder="Ej. 1234567-8"
-                    {...register('ci', { required: 'Este campo es requerido' })}
-                    className="h-12 border-2 border-gray-200 focus:border-accent focus:ring-accent/20 rounded-xl transition-all"
-                  />
+                    <Input
+                      id="ci"
+                      placeholder="Ej. 12.345.678-5"
+                      {...register('ci', {
+                        required: 'Este campo es requerido',
+                        onChange: (e: any) => {
+                          const input = e.target as HTMLInputElement;
+                          const formatted = formatRut(input.value);
+                          // Actualizar el valor del input y react-hook-form
+                          input.value = formatted;
+                          setValue('ci', formatted, { shouldValidate: true });
+                        },
+                        validate: (value: string) => validateRut(value) || 'RUT inválido',
+                      })}
+                      className="h-12 border-2 border-gray-200 focus:border-accent focus:ring-accent/20 rounded-xl transition-all"
+                    />
                   {errors.ci && (
                     <p className="text-sm text-destructive flex items-center gap-1">
                       <span className="w-1 h-1 bg-destructive rounded-full"></span>
@@ -681,30 +1023,60 @@ export default function App() {
                       type="file"
                       accept="image/*"
                       capture="environment"
-                      {...register('idFront', { 
-                        required: 'Este campo es requerido',
-                        onChange: (e) => {
-                          const files = e.target.files;
-                          if (files && files.length > 0) {
-                            setIdFrontName(files[0].name);
-                          }
-                        }
-                      })}
+                      {...idFrontRegister}
+                      ref={(el) => {
+                        idFrontRegister.ref(el);
+                        idFrontFileInputRef.current = el;
+                      }}
                       className="hidden"
                     />
                     <label
                       htmlFor="idFront"
+                      onClick={() => {
+                        if (idFrontFileInputRef.current) {
+                          idFrontFileInputRef.current.value = '';
+                        }
+                      }}
                       className="flex items-center justify-center gap-3 h-14 bg-gradient-to-r from-accent to-accent/90 hover:from-accent/90 hover:to-accent text-white rounded-xl cursor-pointer transition-all duration-200 shadow-md hover:shadow-lg font-semibold"
                     >
                       <Upload className="w-5 h-5" />
                       {idFrontName ? 'Cambiar archivo' : 'Seleccionar archivo'}
                     </label>
                   </div>
+                  {isMobile && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setCameraOpen('front')}
+                      className="w-full h-12 border-2 border-gray-200 hover:border-accent hover:text-accent rounded-xl"
+                    >
+                      Tomar foto (con guía)
+                    </Button>
+                  )}
                   {errors.idFront && (
                     <p className="text-sm text-destructive flex items-center gap-1">
                       <span className="w-1 h-1 bg-destructive rounded-full"></span>
                       {errors.idFront.message}
                     </p>
+                  )}
+                  {ocrLoading.front && (
+                    <div className="flex items-center gap-3">
+                      <p className="text-xs text-gray-500">Procesando imagen para OCR...</p>
+                      <div className="flex-1 h-2 bg-gray-200 rounded overflow-hidden">
+                        <div className="h-2 bg-accent" style={{ width: `${ocrProgress.front}%` }} />
+                      </div>
+                      <span className="text-xs text-gray-500">{ocrProgress.front}%</span>
+                    </div>
+                  )}
+                  {(ocrFront.rut || ocrFront.docNumber) && (
+                    <div className="space-y-1">
+                      {ocrFront.rut && (
+                        <p className={`text-sm ${frontRutMatches ? 'text-accent' : 'text-destructive'}`}>RUN/RUT detectado: {ocrFront.rut} {frontRutMatches ? '— coincide con el ingresado' : '— no coincide con el ingresado'}</p>
+                      )}
+                      {ocrFront.docNumber && (
+                        <p className={`text-sm ${docNumbersMatch ? 'text-accent' : 'text-destructive'}`}>N° documento detectado: {ocrFront.docNumber}{ocrBack.docNumber ? (docNumbersMatch ? ' — coincide con el reverso' : ' — no coincide con el reverso') : ''}</p>
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -720,30 +1092,60 @@ export default function App() {
                       type="file"
                       accept="image/*"
                       capture="environment"
-                      {...register('idBack', { 
-                        required: 'Este campo es requerido',
-                        onChange: (e) => {
-                          const files = e.target.files;
-                          if (files && files.length > 0) {
-                            setIdBackName(files[0].name);
-                          }
-                        }
-                      })}
+                      {...idBackRegister}
+                      ref={(el) => {
+                        idBackRegister.ref(el);
+                        idBackFileInputRef.current = el;
+                      }}
                       className="hidden"
                     />
                     <label
                       htmlFor="idBack"
+                      onClick={() => {
+                        if (idBackFileInputRef.current) {
+                          idBackFileInputRef.current.value = '';
+                        }
+                      }}
                       className="flex items-center justify-center gap-3 h-14 bg-gradient-to-r from-accent to-accent/90 hover:from-accent/90 hover:to-accent text-white rounded-xl cursor-pointer transition-all duration-200 shadow-md hover:shadow-lg font-semibold"
                     >
                       <Upload className="w-5 h-5" />
                       {idBackName ? 'Cambiar archivo' : 'Seleccionar archivo'}
                     </label>
                   </div>
+                  {isMobile && (
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setCameraOpen('back')}
+                      className="w-full h-12 border-2 border-gray-200 hover:border-accent hover:text-accent rounded-xl"
+                    >
+                      Tomar foto (con guía)
+                    </Button>
+                  )}
                   {errors.idBack && (
                     <p className="text-sm text-destructive flex items-center gap-1">
                       <span className="w-1 h-1 bg-destructive rounded-full"></span>
                       {errors.idBack.message}
                     </p>
+                  )}
+                  {ocrLoading.back && (
+                    <div className="flex items-center gap-3">
+                      <p className="text-xs text-gray-500">Procesando imagen para OCR...</p>
+                      <div className="flex-1 h-2 bg-gray-200 rounded overflow-hidden">
+                        <div className="h-2 bg-accent" style={{ width: `${ocrProgress.back}%` }} />
+                      </div>
+                      <span className="text-xs text-gray-500">{ocrProgress.back}%</span>
+                    </div>
+                  )}
+                  {(ocrBack.rut || ocrBack.docNumber) && (
+                    <div className="space-y-1">
+                      {ocrBack.rut && (
+                        <p className={`text-sm ${backRutMatches ? 'text-accent' : 'text-destructive'}`}>RUN/RUT detectado: {ocrBack.rut} {backRutMatches ? '— coincide con el ingresado' : '— no coincide con el ingresado'}</p>
+                      )}
+                      {ocrBack.docNumber && (
+                        <p className={`text-sm ${docNumbersMatch ? 'text-accent' : 'text-destructive'}`}>N° documento detectado: {ocrBack.docNumber}{ocrFront.docNumber ? (docNumbersMatch ? ' — coincide con el frente' : ' — no coincide con el frente') : ''}</p>
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -873,7 +1275,7 @@ export default function App() {
                 </Label>
                 
                 <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-7 gap-2">
-                  {validDates.map((dateInfo, index) => {
+                  {validDates.map((dateInfo) => {
                     const displayDate = formatDateDisplay(dateInfo.formatted);
                     const isSelected = selectedDates.includes(dateInfo.formatted);
                     
@@ -937,10 +1339,13 @@ export default function App() {
             <Button 
               type="submit" 
               className="w-full bg-gradient-to-r from-accent to-accent/90 hover:from-accent/90 hover:to-accent text-white py-7 text-lg shadow-2xl hover:shadow-accent/50 transition-all duration-300 font-bold rounded-2xl"
-              disabled={isSubmitting || submitted}
+              disabled={isSubmitting || submitted || ocrBlocksSubmit}
             >
               {isSubmitting ? 'Enviando solicitud...' : submitted ? '¡Enviado!' : 'Enviar Solicitud'}
             </Button>
+            {ocrBlocksSubmit && (
+              <p className="mt-2 text-sm text-destructive">No puedes enviar: los datos detectados en las imágenes no coinciden con los datos ingresados.</p>
+            )}
           </div>
         </form>
       </main>
