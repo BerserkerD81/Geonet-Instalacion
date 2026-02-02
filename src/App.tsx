@@ -102,6 +102,7 @@ export default function App() {
   const timeFromValue = watch('timeFrom');
   const timeToValue = watch('timeTo');
   const hasIdFront = Boolean(idFrontName) || ((idFrontFiles?.length ?? 0) > 0);
+  const submitMsgRef = useRef<HTMLDivElement | null>(null);
 
   /*
   const stopCamera = () => {
@@ -549,7 +550,37 @@ export default function App() {
       });
 
       if (!response.ok) {
-        throw new Error(`Error del servidor: ${response.status} ${response.statusText}`);
+        // Intentar leer JSON con detalles de validación (p. ej. { email: ['...'] })
+        let errBody: any = null;
+        try {
+          errBody = await response.json();
+        } catch (e) {
+          // no-op
+        }
+
+        let errText = `${response.status} ${response.statusText}`;
+        if (errBody && typeof errBody === 'object') {
+          // Formatear objetos tipo { field: [messages] } a líneas legibles
+          try {
+            const parts: string[] = [];
+            for (const [k, v] of Object.entries(errBody)) {
+              if (Array.isArray(v)) {
+                parts.push(`${k}: ${v.join(', ')}`);
+              } else if (typeof v === 'string') {
+                parts.push(`${k}: ${v}`);
+              } else {
+                parts.push(`${k}: ${JSON.stringify(v)}`);
+              }
+            }
+            if (parts.length > 0) errText = parts.join(' — ');
+          } catch (e) {
+            errText = JSON.stringify(errBody);
+          }
+        }
+        setSubmitErrorMsg(errText);
+        setTimeout(() => { try { submitMsgRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {} }, 100);
+        setIsSubmitting(false);
+        return;
       }
 
       const result = await response.json();
@@ -576,9 +607,11 @@ export default function App() {
 
     } catch (error) {
       console.error('Error al enviar el formulario:', error);
-      setSubmitErrorMsg(error instanceof Error ? error.message : 'Por favor, intenta nuevamente.');
+      const msg = error instanceof Error ? error.message : 'Por favor, intenta nuevamente.';
+      setSubmitErrorMsg(msg);
+      setTimeout(() => { try { submitMsgRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {} }, 100);
       toast.error('Error al enviar la solicitud', { 
-        description: error instanceof Error ? error.message : 'Por favor, intenta nuevamente.' 
+        description: msg
       });
       setIsSubmitting(false);
     }
@@ -644,18 +677,6 @@ export default function App() {
         </div>
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-          {submitErrorMsg && (
-            <div className="rounded-2xl border border-destructive/20 bg-destructive/5 px-5 py-4 text-destructive shadow-sm">
-              <div className="font-bold">No se pudo enviar la solicitud</div>
-              <div className="text-sm opacity-90">{submitErrorMsg}</div>
-            </div>
-          )}
-          {submitted && !submitErrorMsg && (
-            <div className="rounded-2xl border border-accent/20 bg-accent/10 px-5 py-4 text-primary shadow-sm">
-              <div className="font-bold">¡Solicitud enviada!</div>
-              <div className="text-sm opacity-90">Nos pondremos en contacto contigo pronto.</div>
-            </div>
-          )}
 
           {/*
             Cámara con guía (DESACTIVADA por ahora): requiere HTTPS en móviles.
@@ -1388,6 +1409,19 @@ export default function App() {
               {isSubmitting ? 'Enviando solicitud...' : submitted ? '¡Enviado!' : 'Enviar Solicitud'}
             </Button>
           </div>
+          {/* Mensajes de resultado (error / éxito) colocados debajo del botón */}
+          {submitErrorMsg && (
+            <div ref={submitMsgRef} className="mt-4 rounded-2xl border border-destructive/20 bg-destructive/5 px-5 py-4 text-destructive shadow-sm">
+              <div className="font-bold">No se pudo enviar la solicitud</div>
+              <div className="text-sm opacity-90">{submitErrorMsg}</div>
+            </div>
+          )}
+          {submitted && !submitErrorMsg && (
+            <div ref={submitMsgRef} className="mt-4 rounded-2xl border border-accent/20 bg-accent/10 px-5 py-4 text-primary shadow-sm">
+              <div className="font-bold">¡Solicitud enviada!</div>
+              <div className="text-sm opacity-90">Nos pondremos en contacto contigo pronto.</div>
+            </div>
+          )}
         </form>
       </main>
 
