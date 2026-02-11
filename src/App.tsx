@@ -1617,7 +1617,7 @@ export default function App() {
                   </a>
                 </li>
                 <li>
-                  <a href="#" className="text-white hover:text-accent transition-colors font-medium">
+                  <a href="https://clientes.portalinternet.app/saldo/geonet/" className="text-white hover:text-accent transition-colors font-medium">
                     Paga tu cuenta
                   </a>
                 </li>
@@ -1627,7 +1627,7 @@ export default function App() {
                   </a>
                 </li>
                 <li>
-                  <a href="#" className="text-white hover:text-accent transition-colors font-medium">
+                  <a href="https://empresas.geonet.cl" className="text-white hover:text-accent transition-colors font-medium">
                     Internet rural
                   </a>
                 </li>
@@ -1643,7 +1643,7 @@ export default function App() {
               <div className="space-y-2 text-sm">
                 <p className="text-white font-semibold">+56 9 4071 5729</p>
                 <p className="text-white/90">Tres Sur 681, Talca - Chile</p>
-                <a href="#" className="text-white/90 hover:text-accent transition-colors inline-block underline">
+                <a href="https://www.google.com/maps/place/Geonet/@-35.4292574,-71.6698095,17z/data=!4m14!1m7!3m6!1s0x9665c6a08f923119:0x67e998824942341b!2sGeonet!8m2!3d-35.4292574!4d-71.6672292!16s%2Fg%2F1tdyxkrb!3m5!1s0x9665c6a08f923119:0x67e998824942341b!8m2!3d-35.4292574!4d-71.6672292!16s%2Fg%2F1tdyxkrb?entry=ttu&g_ep=EgoyMDI0MTIxMS4wIKXMDSoASAFQAw%3D%3D" className="text-white/90 hover:text-accent transition-colors inline-block underline">
                   Ver en el mapa
                 </a>
               </div>
@@ -1652,7 +1652,7 @@ export default function App() {
 
           {/* Copyright */}
           <div className="mt-12 pt-6 text-center text-sm text-white/80">
-            <p>Talca - Chile © 2024 Geonet</p>
+            <p>Talca - Chile © 2026 Geonet</p>
           </div>
         </div>
       </footer>
