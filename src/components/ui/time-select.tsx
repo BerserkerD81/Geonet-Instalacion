@@ -72,7 +72,7 @@ export function TimeSelect({
   const selectValue = value ?? "";
 
   return (
-    <div ref={rootRef} className={cn("relative", className)}>
+    <div ref={rootRef} className={cn("relative z-30", className)}>
       <button
         id={id}
         ref={buttonRef}
@@ -101,8 +101,8 @@ export function TimeSelect({
           role="listbox"
           tabIndex={-1}
           className={cn(
-            "absolute left-0 right-0 mt-2 overflow-hidden rounded-xl border bg-white shadow-2xl ring-1 ring-black/5 z-[100]",
-            "max-h-64 overflow-y-auto",
+            "absolute left-0 right-0 mt-2 overflow-hidden rounded-xl border bg-white shadow-2xl ring-1 ring-black/5 z-[200]",
+            "max-h-60 overflow-y-auto",
             "border-gray-200",
           )}
         >

@@ -191,3 +191,36 @@
   small { @apply text-sm font-medium leading-none; }
   p { @apply leading-7; }
 }
+
+/* Google Maps Places Autocomplete */
+.pac-container {
+  z-index: 9999 !important;
+  border-radius: 14px !important;
+  border: 1px solid rgba(0, 0, 0, 0.08) !important;
+  box-shadow: 0 20px 45px rgba(15, 23, 42, 0.18) !important;
+  padding: 6px !important;
+  font-family: var(--font-body) !important;
+}
+
+.pac-item {
+  border-top: 0 !important;
+  padding: 10px 12px !important;
+  border-radius: 10px !important;
+  color: #1f2937 !important;
+  font-size: 14px !important;
+  line-height: 1.2 !important;
+}
+
+.pac-item .pac-item-query {
+  font-weight: 600 !important;
+  color: #0f172a !important;
+}
+
+.pac-item:hover,
+.pac-item.pac-item-selected {
+  background: rgba(255, 140, 0, 0.12) !important;
+}
+
+.pac-icon {
+  margin-right: 10px !important;
+}

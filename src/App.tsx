@@ -5,7 +5,7 @@ import { Input } from './components/ui/input';
 import { Label } from './components/ui/label';
 import { Textarea } from './components/ui/textarea';
 import { Card, CardContent } from './components/ui/card';
-import { MapPin, Upload, User, Phone, FileText, Image as Mail, Calendar } from 'lucide-react';
+import { MapPin, Upload, User, Phone, FileText, Image as Mail, Calendar, Wifi } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion} from 'motion/react';
 import { TimeSelect } from './components/ui/time-select';
@@ -58,6 +58,7 @@ interface FormData {
   lastName: string;
   ci: string;
   email: string;
+  plan: string;
   address: string;
   coordinates: string;
   neighborhood: string;
@@ -88,6 +89,7 @@ export default function App() {
   const [addressProofName, setAddressProofName] = useState<string>('');
   const [couponName, setCouponName] = useState<string>('');
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
+  const [planCategory, setPlanCategory] = useState<'home' | 'pyme'>('home');
 
   // --- Cámara con guía (DESACTIVADA por ahora, requiere HTTPS en móvil) ---
   // const [cameraOpen, setCameraOpen] = useState<null | 'front' | 'back'>(null);
@@ -101,6 +103,7 @@ export default function App() {
   const idFrontFiles = watch('idFront');
   const timeFromValue = watch('timeFrom');
   const timeToValue = watch('timeTo');
+  const planValue = watch('plan');
   const hasIdFront = Boolean(idFrontName) || ((idFrontFiles?.length ?? 0) > 0);
   const submitMsgRef = useRef<HTMLDivElement | null>(null);
 
@@ -399,6 +402,58 @@ export default function App() {
     '15:00', '15:30', '16:00', '16:30', '17:00'
   ];
 
+  const planSections = [
+    {
+      title: 'Internet Fibra Hogar',
+      category: 'home' as const,
+      options: [
+        {
+          value: 'Internet Fibra Hogar 400 Mbps - $13.990',
+          label: 'Internet Fibra Hogar 400 Mbps',
+          price: '13.990',
+        },
+        {
+          value: 'Internet Fibra Hogar 600 Mbps - $15.990',
+          label: 'Internet Fibra Hogar 600 Mbps',
+          price: '15.990',
+        },
+        {
+          value: 'Internet Fibra Hogar 800 Mbps - $18.990',
+          label: 'Internet Fibra Hogar 800 Mbps',
+          price: '18.990',
+        },
+      ],
+    },
+    {
+      title: 'Planes PyME',
+      category: 'pyme' as const,
+      options: [
+        {
+          value: 'Plan de Internet FO EMPRESA 700 Mbps - Valor 3.4UF+IVA',
+          label: 'Plan de Internet FO EMPRESA 700 Mbps',
+          price: '3.4UF+IVA',
+        },
+        {
+          value: 'Plan de Internet FO EMPRESA 940 Mbps - Valor 3.9UF+IVA',
+          label: 'Plan de Internet FO EMPRESA 940 Mbps',
+          price: '3.9UF+IVA',
+        },
+        {
+          value: 'Plan Internet FO PyME 600 Mbps - $24.990',
+          label: 'Plan Internet FO PyME 600 Mbps',
+          price: '24.990',
+        },
+        {
+          value: 'Plan Internet FO PyME 800 Mbps - $26.990',
+          label: 'Plan Internet FO PyME 800 Mbps',
+          price: '26.990',
+        },
+      ],
+    },
+  ];
+
+  const filteredPlanSections = planSections.filter((section) => section.category === planCategory);
+
   const timeToMinutes = (value: string) => {
     const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value);
     if (!m) return NaN;
@@ -490,6 +545,12 @@ export default function App() {
         return;
       }
 
+      if (!data.plan) {
+        toast.error('Debes seleccionar un plan de internet');
+        setIsSubmitting(false);
+        return;
+      }
+
       const timeValid = validateTimeRange(data.timeFrom, data.timeTo);
       if (timeValid !== true) {
         toast.error(String(timeValid));
@@ -517,6 +578,7 @@ export default function App() {
       formData.append('lastName', data.lastName);
       formData.append('ci', data.ci);
       formData.append('email', data.email);
+      formData.append('plan', data.plan);
       formData.append('address', data.address);
       formData.append('coordinates', data.coordinates);
       formData.append('neighborhood', data.neighborhood);
@@ -1012,6 +1074,110 @@ export default function App() {
                     </p>
                   )}
                 </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Plan de Internet */}
+          <Card className="shadow-xl border-0 bg-white/80 backdrop-blur-sm overflow-hidden">
+            <div className="bg-gradient-to-r from-accent to-accent/90 p-6">
+              <div className="flex items-center gap-3 text-white">
+                <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-xl flex items-center justify-center">
+                  <Wifi className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="text-2xl font-bold">Selecciona tu Plan</h3>
+                  <p className="text-sm text-white/80">Elige el plan que deseas contratar</p>
+                </div>
+              </div>
+            </div>
+
+            <CardContent className="px-6 pb-8 pt-4 sm:px-8 sm:pt-5">
+              <div className="space-y-5">
+                <div className="flex items-center justify-center">
+                  <div className="relative inline-flex items-center rounded-full bg-white/90 border border-gray-200 shadow-lg p-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setPlanCategory('home')}
+                      className={`relative z-10 px-5 sm:px-6 py-2 text-sm sm:text-base font-bold rounded-full transition-all ${
+                        planCategory === 'home'
+                          ? 'text-white'
+                          : 'text-gray-700 hover:text-gray-900'
+                      }`}
+                    >
+                      Hogar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPlanCategory('pyme')}
+                      className={`relative z-10 px-5 sm:px-6 py-2 text-sm sm:text-base font-bold rounded-full transition-all ${
+                        planCategory === 'pyme'
+                          ? 'text-white'
+                          : 'text-gray-700 hover:text-gray-900'
+                      }`}
+                    >
+                      PyME
+                    </button>
+                    <span
+                      className={`absolute top-1.5 bottom-1.5 left-1.5 w-[calc(50%-0.375rem)] rounded-full bg-gradient-to-r from-accent to-accent/90 shadow-xl transition-transform duration-300 ${
+                        planCategory === 'home' ? 'translate-x-0' : 'translate-x-full'
+                      }`}
+                    />
+                  </div>
+                </div>
+                {filteredPlanSections.map((section) => (
+                  <div key={section.title} className="space-y-3">
+                    <div className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                      <div className="w-1.5 h-1.5 bg-accent rounded-full"></div>
+                      {section.title}
+                    </div>
+                    <div
+                      className={
+                        section.options.length === 2
+                          ? 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-2 gap-5 xl:max-w-4xl xl:mx-auto'
+                          : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5'
+                      }
+                    >
+                      {section.options.map((option) => {
+                        const isSelected = planValue === option.value;
+                        return (
+                          <label
+                            key={option.value}
+                            className={`cursor-pointer rounded-2xl border-2 p-5 min-h-[120px] transition-all duration-200 transform-gpu ${
+                              isSelected
+                                ? 'border-accent bg-accent/5 shadow-lg scale-[1.01]'
+                                : 'border-gray-200 bg-white/70 hover:border-accent/50 hover:shadow-md hover:-translate-y-0.5 hover:scale-[1.01]'
+                            }`}
+                          >
+                            <input
+                              type="radio"
+                              value={option.value}
+                              className="sr-only"
+                              {...register('plan', { required: 'Este campo es requerido' })}
+                            />
+                            <div className="flex items-start justify-between gap-4">
+                              <div className="space-y-1">
+                                <p className="text-base font-bold text-gray-800">{option.label}</p>
+                                <p className="text-xs text-gray-500">Servicio de internet fibra óptica</p>
+                                <div className="text-[11px] text-gray-500">Instalación sujeta a factibilidad</div>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-xl font-extrabold text-primary">$ {option.price}</p>
+                                <p className="text-xs text-gray-500">/Mes</p>
+                              </div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+                {errors.plan && (
+                  <p className="text-sm text-destructive flex items-center gap-1">
+                    <span className="w-1 h-1 bg-destructive rounded-full"></span>
+                    {errors.plan.message}
+                  </p>
+                )}
               </div>
             </CardContent>
           </Card>
