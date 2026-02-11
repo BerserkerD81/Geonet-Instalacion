@@ -717,12 +717,13 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-5">
           <div className="flex items-center justify-between">
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight" style={{ fontFamily: "'Quicksand', sans-serif", letterSpacing: '-0.02em' }}>
-              <span className="text-accent">G</span>
-              <span className="text-primary">eonet</span>
+              <img
+                src="https://geonet.cl/wp-content/uploads/2024/12/Logo_186x86.svg"
+                alt="Geonet"
+                className="h-8 sm:h-10 object-contain"
+              />
             </h1>
             <div className="hidden sm:flex items-center gap-2 text-gray-700 text-sm">
-              <Phone className="w-4 h-4" />
-              <span className="font-semibold">+56 9 4071 5729</span>
             </div>
           </div>
         </div>
@@ -1598,7 +1599,11 @@ export default function App() {
             {/* Logo y Descripción */}
             <div className="md:col-span-4 text-center md:text-left space-y-4">
               <h2 className="text-3xl sm:text-4xl font-bold" style={{ fontFamily: "'Quicksand', sans-serif", letterSpacing: '-0.02em' }}>
-                <span className="text-white">Geonet</span>
+                <img
+                  src="https://geonet.cl/wp-content/uploads/2024/12/logo-footer.png"
+                  alt="Geonet"
+                  className="h-8 sm:h-10 mx-auto md:mx-0 object-contain"
+                />
               </h2>
               <p className="text-sm text-white/90 leading-relaxed max-w-xs mx-auto md:mx-0">
                 Con 20 años de experiencia brindando internet de alta calidad a empresas, en GEONET estamos emocionados de llevar este mismo nivel de servicio a los hogares.
