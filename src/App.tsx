@@ -1386,38 +1386,6 @@ export default function App() {
                     </p>
                   )}
                 </div>
-
-                {/* Coupon */}
-                <div className="space-y-3">
-                  <Label htmlFor="coupon" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 bg-gray-300 rounded-full"></div>
-                    Cupón de Descuento
-                  </Label>
-                  <div className="relative group">
-                    <input
-                      id="coupon"
-                      type="file"
-                      accept="image/*"
-                      capture="environment"
-                      {...register('coupon', {
-                        onChange: (e) => {
-                          const files = e.target.files;
-                          if (files && files.length > 0) {
-                            setCouponName(files[0].name);
-                          }
-                        }
-                      })}
-                      className="hidden"
-                    />
-                    <label
-                      htmlFor="coupon"
-                      className="flex items-center justify-center gap-3 h-14 bg-gradient-to-r from-primary to-primary/90 hover:from-primary/90 hover:to-primary text-white rounded-xl cursor-pointer transition-all duration-200 shadow-md hover:shadow-lg font-semibold"
-                    >
-                      <Upload className="w-5 h-5" />
-                      {couponName ? 'Cambiar archivo' : 'Seleccionar archivo'}
-                    </label>
-                  </div>
-                </div>
               </div>
             </CardContent>
           </Card>
