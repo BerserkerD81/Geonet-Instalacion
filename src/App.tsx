@@ -104,7 +104,20 @@ export default function App() {
   const [addressProofError, setAddressProofError] = useState<string>('');
   const [couponName, setCouponName] = useState<string>('');
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
-  const [planCategory, setPlanCategory] = useState<'home' | 'pyme'>('home');
+  const inferInitialCategory = () => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const planParam = (params.get('plan') || params.get('category') || '').toLowerCase();
+      if (planParam.includes('pyme')) return 'pyme' as const;
+      if (planParam.includes('home') || planParam.includes('hogar')) return 'home' as const;
+      const path = (window.location.pathname || '').replace(/^\/+/, '').toLowerCase();
+      if (path.includes('pyme')) return 'pyme' as const;
+      if (path.includes('home') || path.includes('hogar')) return 'home' as const;
+    } catch (e) {}
+    return 'home' as const;
+  };
+
+  const [planCategory, setPlanCategory] = useState<'home' | 'pyme'>(inferInitialCategory());
 
   const idFrontFileInputRef = useRef<HTMLInputElement | null>(null);
   const idBackFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -667,24 +680,101 @@ export default function App() {
       title: 'Internet Fibra Hogar',
       category: 'home' as const,
       options: [
-        { value: 'Internet Fibra Hogar 400 Mbps - $13.990', label: 'Internet Fibra Hogar 400 Mbps', price: '13.990' },
-        { value: 'Internet Fibra Hogar 600 Mbps - $15.990', label: 'Internet Fibra Hogar 600 Mbps', price: '15.990' },
-        { value: 'Internet Fibra Hogar 800 Mbps - $18.990', label: 'Internet Fibra Hogar 800 Mbps', price: '18.990' },
+        { value: 'Internet Fibra Hogar 400 Mbps - $13.990', label: 'Internet Fibra Hogar 400 Mbps', price: '13.990', slug: 'home-400' },
+        { value: 'Internet Fibra Hogar 600 Mbps - $15.990', label: 'Internet Fibra Hogar 600 Mbps', price: '15.990', slug: 'home-600' },
+        { value: 'Internet Fibra Hogar 800 Mbps - $18.990', label: 'Internet Fibra Hogar 800 Mbps', price: '18.990', slug: 'home-800' },
       ],
     },
     {
       title: 'Planes PyME',
       category: 'pyme' as const,
       options: [
-        { value: 'Plan de Internet FO EMPRESA 700 Mbps - Valor 3.4UF+IVA', label: 'Plan de Internet FO EMPRESA 700 Mbps', price: '3.4UF+IVA' },
-        { value: 'Plan de Internet FO EMPRESA 940 Mbps - Valor 3.9UF+IVA', label: 'Plan de Internet FO EMPRESA 940 Mbps', price: '3.9UF+IVA' },
-        { value: 'Plan Internet FO PyME 600 Mbps - $24.990', label: 'Plan Internet FO PyME 600 Mbps', price: '24.990' },
-        { value: 'Plan Internet FO PyME 800 Mbps - $26.990', label: 'Plan Internet FO PyME 800 Mbps', price: '26.990' },
+        { value: 'Plan de Internet FO EMPRESA 700 Mbps - Valor 3.4UF+IVA', label: 'Plan de Internet FO EMPRESA 700 Mbps', price: '3.4UF+IVA', slug: 'pyme-700uf' },
+        { value: 'Plan de Internet FO EMPRESA 940 Mbps - Valor 3.9UF+IVA', label: 'Plan de Internet FO EMPRESA 940 Mbps', price: '3.9UF+IVA', slug: 'pyme-940uf' },
+        { value: 'Plan Internet FO PyME 600 Mbps - $24.990', label: 'Plan Internet FO PyME 600 Mbps', price: '24.990', slug: 'pyme-600' },
+        { value: 'Plan Internet FO PyME 800 Mbps - $26.990', label: 'Plan Internet FO PyME 800 Mbps', price: '26.990', slug: 'pyme-800' },
       ],
     },
   ];
 
   const filteredPlanSections = planSections.filter((section) => section.category === planCategory);
+
+  // Si la URL indica una categoría, preseleccionamos el primer plan de esa categoría
+  useEffect(() => {
+    try {
+      const current = watch('plan');
+      if (current) return;
+      const section = filteredPlanSections[0];
+      if (section && section.options && section.options.length > 0) {
+        setValue('plan', section.options[0].value, { shouldValidate: true, shouldDirty: false });
+      }
+    } catch (e) {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planCategory]);
+
+  // Permitir seleccionar un plan específico vía query `?plan=...` o vía ruta
+  useEffect(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const planParam = params.get('plan');
+      const raw = (planParam || '').trim();
+      if (raw) {
+        const needle = raw.toLowerCase();
+        for (const section of planSections) {
+          for (const opt of section.options) {
+            if (opt.value.toLowerCase().includes(needle) || (opt.label && opt.label.toLowerCase().includes(needle))) {
+              setPlanCategory(section.category);
+              setValue('plan', opt.value, { shouldValidate: true });
+              return;
+            }
+          }
+        }
+      }
+
+      // Also try to infer from pathname, matching any option slug
+      const path = (window.location.pathname || '').toLowerCase();
+      if (path && path !== '/') {
+        // Match routes like /home/home-400 or /pyme/pyme-700uf
+        const m = path.match(/^\/(home|pyme)(?:\/([-a-z0-9]+))?$/);
+        if (m) {
+          const cat = m[1] as 'home' | 'pyme';
+          const maybeSlug = m[2];
+          if (maybeSlug) {
+            for (const section of planSections) {
+              for (const opt of section.options) {
+                const slug = (opt as any).slug || opt.value.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+                if (slug === maybeSlug) {
+                  setPlanCategory(section.category);
+                  setValue('plan', opt.value, { shouldValidate: true });
+                  return;
+                }
+              }
+            }
+          }
+          // if only category in path
+          setPlanCategory(cat);
+          return;
+        }
+
+        // Fallback: find any option slug anywhere in path
+        for (const section of planSections) {
+          for (const opt of section.options) {
+            const slug = (opt as any).slug || opt.value.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+            if (path.includes(slug)) {
+              setPlanCategory(section.category);
+              setValue('plan', opt.value, { shouldValidate: true });
+              return;
+            }
+          }
+        }
+
+        // if path includes category names
+        if (path.includes('pyme')) setPlanCategory('pyme');
+        if (path.includes('home') || path.includes('hogar')) setPlanCategory('home');
+      }
+    } catch (e) {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const timeToMinutes = (value: string) => {
     const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value);
@@ -1242,7 +1332,7 @@ export default function App() {
                     <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Teléfono Celular <span className="text-accent">*</span>
                   </Label>
                   <div className="relative">
-                    <div className="absolute left-3 top-3 flex items-center gap-2 pointer-events-none w-[72px]">
+                    <div className="absolute left-3 inset-y-0 flex items-center gap-2 pointer-events-none w-[72px]">
                       <span className="flex-none w-5 h-3 overflow-hidden rounded-sm">
                         <ReactCountryFlag svg countryCode="CL" aria-label="Chile" style={{ width: '18px', height: '12px', display: 'block' }} />
                       </span>
@@ -1259,14 +1349,6 @@ export default function App() {
                           let v = String(e.target.value || '');
                           v = v.replace(/\D/g, '');
                           if (v.length > 9) v = v.slice(0, 9);
-                          // Forzar el primer dígito a 9 para cumplir formato chileno móvil
-                          if (v.length > 0 && v[0] !== '9') {
-                            v = '9' + (v.slice(1) || '');
-                            if (!phoneAutoCorrectedRef.current) {
-                              toast.info('Se ha ajustado el primer dígito a 9 (formato celular chileno)');
-                              phoneAutoCorrectedRef.current = true;
-                            }
-                          }
                           e.target.value = v;
                           setValue('phone', v, { shouldValidate: true });
                         },
@@ -1294,7 +1376,7 @@ export default function App() {
                     <div className="w-1.5 h-1.5 bg-gray-300 rounded-full"></div> Teléfono Adicional
                   </Label>
                   <div className="relative">
-                    <div className="absolute left-3 top-3 flex items-center gap-2 pointer-events-none w-[72px]">
+                    <div className="absolute left-3 inset-y-0 flex items-center gap-2 pointer-events-none w-[72px]">
                       <span className="flex-none w-5 h-3 overflow-hidden rounded-sm">
                         <ReactCountryFlag svg countryCode="CL" aria-label="Chile" style={{ width: '18px', height: '12px', display: 'block' }} />
                       </span>
@@ -1310,13 +1392,6 @@ export default function App() {
                           let v = String(e.target.value || '');
                           v = v.replace(/\D/g, '');
                           if (v.length > 9) v = v.slice(0, 9);
-                          if (v.length > 0 && v[0] !== '9') {
-                            v = '9' + (v.slice(1) || '');
-                            if (!addPhoneAutoCorrectedRef.current) {
-                              toast.info('Se ha ajustado el primer dígito a 9 (formato celular chileno)');
-                              addPhoneAutoCorrectedRef.current = true;
-                            }
-                          }
                           e.target.value = v;
                           setValue('additionalPhone', v, { shouldValidate: true });
                         },
