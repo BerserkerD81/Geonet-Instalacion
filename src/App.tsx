@@ -1332,7 +1332,7 @@ export default function App() {
                     <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Teléfono Celular <span className="text-accent">*</span>
                   </Label>
                   <div className="relative">
-                    <div className="absolute left-3 inset-y-0 flex items-center gap-2 pointer-events-none w-[72px]">
+                    <div className="absolute left-3 top-0 h-12 flex items-center gap-2 pointer-events-none w-[72px]">
                       <span className="flex-none w-5 h-3 overflow-hidden rounded-sm">
                         <ReactCountryFlag svg countryCode="CL" aria-label="Chile" style={{ width: '18px', height: '12px', display: 'block' }} />
                       </span>
@@ -1368,7 +1368,7 @@ export default function App() {
                       })}
                       className={errors.phone ? 'h-12 pl-[72px] border-2 border-red-500 rounded-xl' : 'h-12 pl-[72px] border-2 border-gray-200 focus:border-accent rounded-xl'}
                     />
-                    {errors.phone?.message && <p className="text-sm text-red-600 mt-2">{String(errors.phone.message)}</p>}
+                    <p className="text-sm text-red-600 mt-2 min-h-5">{errors.phone?.message ? String(errors.phone.message) : ''}</p>
                   </div>
                 </div>
                 <div className="space-y-2.5">
@@ -1376,7 +1376,7 @@ export default function App() {
                     <div className="w-1.5 h-1.5 bg-gray-300 rounded-full"></div> Teléfono Adicional
                   </Label>
                   <div className="relative">
-                    <div className="absolute left-3 inset-y-0 flex items-center gap-2 pointer-events-none w-[72px]">
+                    <div className="absolute left-3 top-0 h-12 flex items-center gap-2 pointer-events-none w-[72px]">
                       <span className="flex-none w-5 h-3 overflow-hidden rounded-sm">
                         <ReactCountryFlag svg countryCode="CL" aria-label="Chile" style={{ width: '18px', height: '12px', display: 'block' }} />
                       </span>
@@ -1412,7 +1412,7 @@ export default function App() {
                       })}
                       className={errors.additionalPhone ? 'h-12 pl-[72px] border-2 border-red-500 rounded-xl' : 'h-12 pl-[72px] border-2 border-gray-200 focus:border-accent rounded-xl'}
                     />
-                    {errors.additionalPhone?.message && <p className="text-sm text-red-600 mt-2">{String(errors.additionalPhone.message)}</p>}
+                    <p className="text-sm text-red-600 mt-2 min-h-5">{errors.additionalPhone?.message ? String(errors.additionalPhone.message) : ''}</p>
                   </div>
                 </div>
               </div>
