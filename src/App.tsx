@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import ReactCountryFlag from 'react-country-flag';
 import { Controller, useForm } from 'react-hook-form';
 import { Button } from './components/ui/button';
 import { Input } from './components/ui/input';
@@ -9,7 +10,6 @@ import { MapPin, Upload, User, Phone, FileText, Image as Mail, Calendar, Wifi, L
 import { toast } from 'sonner';
 import { motion } from 'motion/react';
 import { TimeSelect } from './components/ui/time-select';
-import Footer from './components/Footer';
 
 // Tipos para Google Maps
 declare global {
@@ -82,15 +82,19 @@ interface FormData {
 }
 
 export default function App() {
-  const { register, handleSubmit, formState: { errors }, reset, setValue, watch, control, clearErrors } = useForm<FormData>();
+  const { register, handleSubmit, formState: { errors }, reset, setValue, watch, control, clearErrors, trigger } = useForm<FormData>();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [submitErrorMsg, setSubmitErrorMsg] = useState<string | null>(null);
+  const [submissionStatus, setSubmissionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   
   // Estado para controlar el loading del botón de ubicación
   const [isLocating, setIsLocating] = useState(false);
 
   const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
+  // Control para interacción del mapa en móvil
+  const [mapInteractionEnabled, setMapInteractionEnabled] = useState<boolean>(() => !isMobile);
 
   const [idFrontName, setIdFrontName] = useState<string>('');
   const [idBackName, setIdBackName] = useState<string>('');
@@ -116,6 +120,23 @@ export default function App() {
     const dt = new DataTransfer();
     dt.items.add(file);
     return dt.files;
+  };
+
+  const scrollToField = (fieldName?: string) => {
+    try {
+      let el: Element | null = null;
+      if (fieldName) {
+        el = document.querySelector(`[name="${fieldName}"], #${fieldName}, [data-field="${fieldName}"]`);
+      }
+      if (!el) el = document.querySelector('.is-invalid, [aria-invalid="true"], :invalid');
+      if (!el) el = document.querySelector('input[name], select[name], textarea[name]');
+      if (el && (el as HTMLElement).scrollIntoView) {
+        (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
+        try { (el as HTMLElement).focus(); } catch (e) {}
+      }
+    } catch (e) {
+      // ignore
+    }
   };
 
   // Valida que el archivo sea JPG o PNG estrictamente
@@ -149,7 +170,6 @@ export default function App() {
   };
 
   const idFrontRegister = register('idFront', {
-    required: 'Este campo es requerido',
     onChange: async (e) => {
       const files = e.target.files;
       if (files && files.length > 0) {
@@ -180,7 +200,6 @@ export default function App() {
   });
 
   const idBackRegister = register('idBack', {
-    required: 'Este campo es requerido',
     onChange: async (e) => {
       const files = e.target.files;
       if (files && files.length > 0) {
@@ -223,8 +242,11 @@ export default function App() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
+  // Refs para evitar repetir notificaciones de autocorrección
+  const phoneAutoCorrectedRef = useRef(false);
+  const addPhoneAutoCorrectedRef = useRef(false);
 
-  // Inicializar Autocomplete
+  // Inicializar Autocomplete con la nueva API (PlaceAutocomplete)
   useEffect(() => {
     let cancelled = false;
 
@@ -241,30 +263,55 @@ export default function App() {
         await loadGoogleMapsPlaces(effectiveKey);
         if (cancelled) return;
 
-        const Autocomplete = window.google?.maps?.places?.Autocomplete;
-        if (!Autocomplete) return;
+        if (!addressInputRef.current) return;
 
-        if (addressInputRef.current) {
-          autocompleteInstance.current = new Autocomplete(addressInputRef.current, {
+        const Places = window.google?.maps?.places || {};
+
+        // Intentar con la nueva API: PlaceAutocomplete
+        if (Places.PlaceAutocomplete) {
+          const ac = new Places.PlaceAutocomplete(addressInputRef.current, {
             componentRestrictions: { country: 'cl' },
             fields: ['address_components', 'geometry', 'formatted_address'],
             types: ['geocode'],
           });
-
-          autocompleteInstance.current.addListener('place_changed', () => {
-            const place = autocompleteInstance.current.getPlace();
+          autocompleteInstance.current = ac;
+          ac.addListener('place_changed', () => {
+            const place = ac.getPlace();
             fillAddressForm(place);
-            // Si la dirección seleccionada tiene geometría, actualizar el mapa
-            if (place.geometry && place.geometry.location) {
-                const lat = place.geometry.location.lat();
-                const lng = place.geometry.location.lng();
-                if (!mapInstanceRef.current && mapContainerRef.current) {
-                    initMiniMap().then(() => updateMapMarker(lat, lng));
-                } else {
-                    updateMapMarker(lat, lng);
-                }
+            if (place?.geometry?.location) {
+              const lat = typeof place.geometry.location.lat === 'function' ? place.geometry.location.lat() : place.geometry.location.lat;
+              const lng = typeof place.geometry.location.lng === 'function' ? place.geometry.location.lng() : place.geometry.location.lng;
+              if (!mapInstanceRef.current && mapContainerRef.current) {
+                initMiniMap().then(() => updateMapMarker(lat, lng));
+              } else {
+                updateMapMarker(lat, lng);
+              }
             }
           });
+        } 
+        // Fallback al antiguo Autocomplete (solo si no existe PlaceAutocomplete)
+        else if (Places.Autocomplete) {
+          const ac = new Places.Autocomplete(addressInputRef.current, {
+            componentRestrictions: { country: 'cl' },
+            fields: ['address_components', 'geometry', 'formatted_address'],
+            types: ['geocode'],
+          });
+          autocompleteInstance.current = ac;
+          ac.addListener('place_changed', () => {
+            const place = ac.getPlace();
+            fillAddressForm(place);
+            if (place?.geometry?.location) {
+              const lat = typeof place.geometry.location.lat === 'function' ? place.geometry.location.lat() : place.geometry.location.lat;
+              const lng = typeof place.geometry.location.lng === 'function' ? place.geometry.location.lng() : place.geometry.location.lng;
+              if (!mapInstanceRef.current && mapContainerRef.current) {
+                initMiniMap().then(() => updateMapMarker(lat, lng));
+              } else {
+                updateMapMarker(lat, lng);
+              }
+            }
+          });
+        } else {
+          console.warn('No se encontró ninguna API de autocompletado de Google Maps');
         }
       } catch (error) {
         console.error('Error cargando Google Maps Places Library', error);
@@ -376,15 +423,19 @@ export default function App() {
       if (!window.google?.maps) return;
       if (mapInstanceRef.current) return;
 
-      const defaultCenter = { lat: -33.45, lng: -70.6667 };
+      const defaultCenter = { lat: -35.4269, lng: -71.6554 };
       
       // mapId es necesario para AdvancedMarkerElement. 'DEMO_MAP_ID' es válido para desarrollo.
       mapInstanceRef.current = new window.google.maps.Map(mapContainerRef.current, {
         center: defaultCenter,
-        zoom: 12,
-        disableDefaultUI: true,
-        gestureHandling: 'greedy',
-        mapId: 'DEMO_MAP_ID', 
+        zoom: 13,
+        zoomControl: true,
+        fullscreenControl: true,
+        streetViewControl: false,
+        mapTypeControl: false,
+        clickableIcons: false,
+        gestureHandling: mapInteractionEnabled ? 'greedy' : (isMobile ? 'cooperative' : 'auto'),
+        mapId: 'DEMO_MAP_ID',
       });
 
       mapInstanceRef.current.addListener('click', (ev: any) => {
@@ -393,6 +444,17 @@ export default function App() {
         updateMapMarker(lat, lng);
         void reverseGeocodeAndFill(lat, lng);
       });
+
+      // Si el usuario toca el mapa en móvil, habilitamos interacción (pellizcar/arrastrar)
+      if (isMobile && mapContainerRef.current) {
+        const onTouch = () => {
+          try {
+            if (mapInstanceRef.current) mapInstanceRef.current.setOptions({ gestureHandling: 'greedy' });
+            setMapInteractionEnabled(true);
+          } catch (e) {}
+        };
+        mapContainerRef.current.addEventListener('touchstart', onTouch, { passive: true, once: true });
+      }
 
       const coords = (watch('coordinates') || '') as string;
       if (coords) {
@@ -485,8 +547,24 @@ export default function App() {
       await processFoundLocation(pos.coords.latitude, pos.coords.longitude, 'Ubicación GPS encontrada');
 
     } catch (browserError: any) {
-      console.warn("Navegador falló, intentando Google API...", browserError);
-      
+      console.warn("Navegador falló, intentando fallback de baja precisión...", browserError);
+
+      // Intentar segunda lectura con menor precisión antes de usar Google API
+      try {
+        const getPosition = (opts: PositionOptions): Promise<GeolocationPosition> => {
+          return new Promise((resolve, reject) => {
+            if (!navigator.geolocation) return reject(new Error("No support"));
+            navigator.geolocation.getCurrentPosition(resolve, reject, opts);
+          });
+        };
+        const pos2 = await getPosition({ enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 });
+        await processFoundLocation(pos2.coords.latitude, pos2.coords.longitude, 'Ubicación GPS (baja precisión) encontrada');
+        setIsLocating(false);
+        return;
+      } catch (secondaryError) {
+        console.warn('Fallback de baja precisión falló, intentando Google API...', secondaryError);
+      }
+
       // PLAN B: Google Geolocation API (Ideal para Desktop sin GPS)
       try {
         const googleLoc = await fetchGoogleGeolocation();
@@ -685,40 +763,65 @@ export default function App() {
   };
 
   const onSubmit = async (data: FormData) => {
-    setIsSubmitting(true);
-    setSubmitErrorMsg(null);
-    
+      // Trigger validation for all fields before proceeding
+      const allValid = await trigger();
+      if (!allValid) {
+        const msgs: string[] = [];
+        try {
+          for (const [k, v] of Object.entries(errors)) {
+            if (v && (v as any).message) msgs.push(`${k}: ${(v as any).message}`);
+          }
+        } catch (e) {}
+        const summary = msgs.length > 0 ? msgs.join(' — ') : 'Faltan o hay campos inválidos en el formulario';
+        toast.error(summary);
+        setSubmissionStatus('error');
+        setIsSubmitting(false);
+        // scroll to first invalid field
+        try { const first = Object.keys(errors)[0]; scrollToField(first); } catch (e) { scrollToField(undefined); }
+        setTimeout(() => setSubmissionStatus('idle'), 2000);
+        return;
+      }
+
+      setSubmissionStatus('loading');
+      setIsSubmitting(true);
+      setSubmitErrorMsg(null);
+
     try {
       if (selectedDates.length === 0) {
-        toast.error('Debes seleccionar al menos una fecha de instalación');
+        const msg = 'Debes seleccionar al menos una fecha de instalación';
+        toast.error(msg);
+        setSubmitErrorMsg(msg);
+        setSubmissionStatus('error');
         setIsSubmitting(false);
+        setTimeout(() => scrollToField('installationDates'), 150);
+        setTimeout(() => setSubmissionStatus('idle'), 2000);
         return;
       }
 
       if (!data.plan) {
-        toast.error('Debes seleccionar un plan de internet');
+        const msg = 'Debes seleccionar un plan de internet';
+        toast.error(msg);
+        setSubmitErrorMsg(msg);
+        setSubmissionStatus('error');
         setIsSubmitting(false);
+        setTimeout(() => scrollToField('plan'), 150);
+        setTimeout(() => setSubmissionStatus('idle'), 2000);
         return;
       }
 
       const timeValid = validateTimeRange(data.timeFrom, data.timeTo);
       if (timeValid !== true) {
-        toast.error(String(timeValid));
+        const msg = String(timeValid);
+        toast.error(msg);
+        setSubmitErrorMsg(msg);
+        setSubmissionStatus('error');
         setIsSubmitting(false);
+        setTimeout(() => scrollToField('timeFrom'), 150);
+        setTimeout(() => setSubmissionStatus('idle'), 2000);
         return;
       }
 
-      if (!data.idFront || data.idFront.length === 0) {
-        toast.error('Debes subir la identificación (frente)');
-        setIsSubmitting(false);
-        return;
-      }
-
-      if (data.idBack && data.idBack.length > 0 && !data.idFront?.length) {
-        toast.error('No puedes subir el reverso sin el frente');
-        setIsSubmitting(false);
-        return;
-      }
+      // Las imágenes no son obligatorias (idFront/idBack/comprobante/cupón opcionales)
 
       const formData = new window.FormData();
       formData.append('firstName', data.firstName);
@@ -731,8 +834,10 @@ export default function App() {
       formData.append('neighborhood', data.neighborhood);
       formData.append('city', data.city);
       formData.append('postalCode', data.postalCode);
-      formData.append('phone', data.phone);
-      formData.append('additionalPhone', data.additionalPhone || '');
+      const phoneDigits = String(data.phone || '').replace(/\D/g, '').slice(0,9);
+      const additionalDigits = String(data.additionalPhone || '').replace(/\D/g, '').slice(0,9);
+      formData.append('phone', phoneDigits);
+      formData.append('additionalPhone', additionalDigits || '');
       formData.append('comments', data.comments || '');
       formData.append('installationDates', selectedDates.join(','));
       formData.append('timeFrom', data.timeFrom);
@@ -762,30 +867,27 @@ export default function App() {
            } catch(e) { errText = JSON.stringify(errBody); }
         }
         setSubmitErrorMsg(errText);
-        setTimeout(() => { try { submitMsgRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {} }, 100);
+        setSubmissionStatus('error');
         setIsSubmitting(false);
+        const missingField = (errBody && typeof errBody === 'object' && (errBody.field || errBody.name)) ? (errBody.field || errBody.name) : undefined;
+        setTimeout(() => scrollToField(missingField), 150);
+        setTimeout(() => setSubmissionStatus('idle'), 2000);
         return;
       }
 
-      toast.success('¡Solicitud enviada exitosamente!', { description: 'Nos pondremos en contacto contigo pronto.' });
-      setSubmitted(true);
+      setSubmissionStatus('success');
       setIsSubmitting(false);
-      
+      // show tick briefly then redirect
       setTimeout(() => {
-        reset();
-        setSubmitted(false);
-        setIdFrontName('');
-        setIdBackName('');
-        setAddressProofName('');
-        setCouponName('');
-        setSelectedDates([]);
-        if (addressInputRef.current) addressInputRef.current.value = '';
-      }, 3000);
+        try { window.location.href = 'https://geonet.cl'; } catch (e) { window.open('https://geonet.cl', '_self'); }
+      }, 1200);
 
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Por favor, intenta nuevamente.';
       setSubmitErrorMsg(msg);
-      setTimeout(() => { try { submitMsgRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {} }, 100);
+      setSubmissionStatus('error');
+      setTimeout(() => scrollToField(undefined), 150);
+      setTimeout(() => setSubmissionStatus('idle'), 2000);
       toast.error('Error al enviar la solicitud', { description: msg });
       setIsSubmitting(false);
     }
@@ -795,29 +897,77 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50/50 via-white to-orange-50/50">
-      {isSubmitting && (
-        <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-[2px] flex items-center justify-center p-4">
-          <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl border border-white/40 overflow-hidden">
-            <div className="bg-gradient-to-r from-primary to-primary/90 px-6 py-5 text-white">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-white/15 flex items-center justify-center">
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                </div>
-                <div>
-                  <div className="font-bold text-lg leading-tight">Enviando solicitud…</div>
-                  <div className="text-xs text-white/80">Subiendo datos y fotografías</div>
-                </div>
-              </div>
-            </div>
-            <div className="px-6 py-5 space-y-4">
-              <div className="h-2 w-full bg-gray-200 rounded-full overflow-hidden">
-                <div className="h-2 w-1/3 bg-accent animate-pulse rounded-full" />
-              </div>
-              <p className="text-sm text-gray-600">No cierres esta pantalla. Esto puede tardar unos segundos.</p>
-            </div>
-          </div>
-        </div>
-      )}
+{(isSubmitting || submissionStatus !== 'idle') && (
+  <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+    <div className="flex flex-col items-center gap-6 rounded-2xl bg-white px-10 py-8 shadow-2xl animate-fadeIn">
+
+      {/* CÍRCULO CENTRAL */}
+      <div
+        className={`
+          relative flex h-20 w-20 items-center justify-center rounded-full
+          transition-all duration-500
+          ${submissionStatus === 'loading' ? 'bg-primary/10' : ''}
+          ${submissionStatus === 'success' ? 'bg-emerald-500' : ''}
+          ${submissionStatus === 'error' ? 'bg-red-500' : ''}
+        `}
+      >
+        {/* SPINNER */}
+        {submissionStatus === 'loading' && (
+          <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary/30 border-t-primary" />
+        )}
+
+        {/* CHECK */}
+        {submissionStatus === 'success' && (
+          <svg
+            viewBox="0 0 24 24"
+            className="h-10 w-10 text-white animate-check"
+            fill="none"
+          >
+            <path
+              d="M5 13l4 4L19 7"
+              stroke="currentColor"
+              strokeWidth="3"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        )}
+
+        {/* ERROR */}
+        {submissionStatus === 'error' && (
+          <svg
+            viewBox="0 0 24 24"
+            className="h-10 w-10 text-white animate-shake"
+            fill="none"
+          >
+            <path
+              d="M6 6l12 12M18 6L6 18"
+              stroke="currentColor"
+              strokeWidth="3"
+              strokeLinecap="round"
+            />
+          </svg>
+        )}
+      </div>
+
+      {/* TEXTO */}
+      <div className="text-center">
+        <p className="text-base font-semibold text-gray-800">
+          {submissionStatus === 'loading' && 'Enviando solicitud'}
+          {submissionStatus === 'success' && 'Solicitud enviada'}
+          {submissionStatus === 'error' && 'Error al enviar'}
+        </p>
+
+        <p className="mt-1 text-sm text-gray-500">
+          {submissionStatus === 'loading' && 'Por favor espera…'}
+          {submissionStatus === 'success' && 'Redirigiendo…'}
+          {submissionStatus === 'error' && 'Corrige los campos faltantes'}
+        </p>
+      </div>
+
+    </div>
+  </div>
+)}
 
       <header className="bg-white border-b border-gray-200 shadow-md sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-5">
@@ -957,8 +1107,29 @@ export default function App() {
                       </Button>
                     </div>
                   </div>
-                  <div className="mt-3">
-                    <div ref={(el) => (mapContainerRef.current = el)} className="h-44 rounded-xl border-2 border-gray-200 overflow-hidden" />
+                    <div className="mt-3">
+                                  <div className="relative">
+                                    <div ref={(el) => { mapContainerRef.current = el; }} className="h-56 sm:h-72 md:h-96 rounded-xl border-2 border-gray-200 overflow-hidden" />
+                                    {/* Overlay button to enable map interaction on mobile */}
+                                    {isMobile && !mapInteractionEnabled && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          try {
+                                            if (mapInstanceRef.current) mapInstanceRef.current.setOptions({ gestureHandling: 'greedy' });
+                                          } catch (e) {}
+                                          setMapInteractionEnabled(true);
+                                        }}
+                                        className="absolute right-3 top-3 bg-white/90 text-gray-700 px-3 py-2 rounded-lg shadow-sm text-sm flex items-center gap-2"
+                                      >
+                                        <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                                        Interactuar
+                                      </button>
+                                    )}
+                                    {isMobile && mapInteractionEnabled && (
+                                      <div className="absolute right-3 top-3 bg-white/90 text-gray-700 px-3 py-2 rounded-lg shadow-sm text-sm">Interactuando</div>
+                                    )}
+                                  </div>
                   </div>
                 </div>
                 {errors.address && <p className="text-sm text-destructive">{errors.address.message}</p>}
@@ -976,9 +1147,9 @@ export default function App() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                 <div className="space-y-2.5">
                   <Label htmlFor="neighborhood" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Barrio/Zona <span className="text-accent">*</span>
+                    <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Barrio/Zona
                   </Label>
-                  <Input id="neighborhood" placeholder="Ej. Villa 1ro de Mayo" {...register('neighborhood', { required: 'Este campo es requerido' })} className="h-12 border-2 border-gray-200 focus:border-accent rounded-xl" />
+                  <Input id="neighborhood" placeholder="Ej. Villa 1ro de Mayo" {...register('neighborhood')} className="h-12 border-2 border-gray-200 focus:border-accent rounded-xl" />
                   {errors.neighborhood && <p className="text-sm text-destructive">{errors.neighborhood.message}</p>}
                 </div>
                 <div className="space-y-2.5">
@@ -990,9 +1161,9 @@ export default function App() {
                 </div>
                 <div className="space-y-2.5">
                   <Label htmlFor="postalCode" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Código Postal <span className="text-accent">*</span>
+                    <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Código Postal
                   </Label>
-                  <Input id="postalCode" placeholder="Ej. 0000" {...register('postalCode', { required: 'Este campo es requerido' })} className="h-12 border-2 border-gray-200 focus:border-accent rounded-xl" />
+                  <Input id="postalCode" placeholder="Ej. 0000" {...register('postalCode')} className="h-12 border-2 border-gray-200 focus:border-accent rounded-xl" />
                   {errors.postalCode && <p className="text-sm text-destructive">{errors.postalCode.message}</p>}
                 </div>
               </div>
@@ -1071,8 +1242,51 @@ export default function App() {
                     <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Teléfono Celular <span className="text-accent">*</span>
                   </Label>
                   <div className="relative">
-                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                    <Input id="phone" type="tel" placeholder="Ej. 70123456" {...register('phone', { required: 'Este campo es requerido' })} className="h-12 pl-10 border-2 border-gray-200 focus:border-accent rounded-xl" />
+                    <div className="absolute left-3 top-3 flex items-center gap-2 pointer-events-none w-[72px]">
+                      <span className="flex-none w-5 h-3 overflow-hidden rounded-sm">
+                        <ReactCountryFlag svg countryCode="CL" aria-label="Chile" style={{ width: '18px', height: '12px', display: 'block' }} />
+                      </span>
+                      <span className="flex-none text-sm text-gray-600 whitespace-nowrap">+56</span>
+                    </div>
+                    <Input
+                      id="phone"
+                      type="tel"
+                      placeholder="9XXXXXXXX"
+                      aria-invalid={!!errors.phone}
+                      {...register('phone', {
+                        required: 'Este campo es requerido',
+                        onChange: (e: any) => {
+                          let v = String(e.target.value || '');
+                          v = v.replace(/\D/g, '');
+                          if (v.length > 9) v = v.slice(0, 9);
+                          // Forzar el primer dígito a 9 para cumplir formato chileno móvil
+                          if (v.length > 0 && v[0] !== '9') {
+                            v = '9' + (v.slice(1) || '');
+                            if (!phoneAutoCorrectedRef.current) {
+                              toast.info('Se ha ajustado el primer dígito a 9 (formato celular chileno)');
+                              phoneAutoCorrectedRef.current = true;
+                            }
+                          }
+                          e.target.value = v;
+                          setValue('phone', v, { shouldValidate: true });
+                        },
+                        validate: (v: string) => {
+                          const cleaned = String(v || '').replace(/\D/g, '');
+                          if (cleaned.length !== 9) return 'El número debe tener 9 dígitos';
+                          if (!/^9/.test(cleaned)) return 'El número debe comenzar con 9';
+                          return true;
+                        },
+                        onBlur: (e: any) => {
+                          const v = String(e.target.value || '').replace(/\D/g, '');
+                          if (!v) return;
+                          if (v.length !== 9 || !/^9/.test(v)) {
+                            toast.error('Teléfono inválido: debe tener 9 dígitos y comenzar con 9');
+                          }
+                        },
+                      })}
+                      className={errors.phone ? 'h-12 pl-[72px] border-2 border-red-500 rounded-xl' : 'h-12 pl-[72px] border-2 border-gray-200 focus:border-accent rounded-xl'}
+                    />
+                    {errors.phone?.message && <p className="text-sm text-red-600 mt-2">{String(errors.phone.message)}</p>}
                   </div>
                 </div>
                 <div className="space-y-2.5">
@@ -1080,8 +1294,50 @@ export default function App() {
                     <div className="w-1.5 h-1.5 bg-gray-300 rounded-full"></div> Teléfono Adicional
                   </Label>
                   <div className="relative">
-                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                    <Input id="additionalPhone" type="tel" placeholder="Ej. 3456789" {...register('additionalPhone')} className="h-12 pl-10 border-2 border-gray-200 focus:border-accent rounded-xl" />
+                    <div className="absolute left-3 top-3 flex items-center gap-2 pointer-events-none w-[72px]">
+                      <span className="flex-none w-5 h-3 overflow-hidden rounded-sm">
+                        <ReactCountryFlag svg countryCode="CL" aria-label="Chile" style={{ width: '18px', height: '12px', display: 'block' }} />
+                      </span>
+                      <span className="flex-none text-sm text-gray-600 whitespace-nowrap">+56</span>
+                    </div>
+                    <Input
+                      id="additionalPhone"
+                      type="tel"
+                      placeholder="9XXXXXXXX"
+                      aria-invalid={!!errors.additionalPhone}
+                      {...register('additionalPhone', {
+                        onChange: (e: any) => {
+                          let v = String(e.target.value || '');
+                          v = v.replace(/\D/g, '');
+                          if (v.length > 9) v = v.slice(0, 9);
+                          if (v.length > 0 && v[0] !== '9') {
+                            v = '9' + (v.slice(1) || '');
+                            if (!addPhoneAutoCorrectedRef.current) {
+                              toast.info('Se ha ajustado el primer dígito a 9 (formato celular chileno)');
+                              addPhoneAutoCorrectedRef.current = true;
+                            }
+                          }
+                          e.target.value = v;
+                          setValue('additionalPhone', v, { shouldValidate: true });
+                        },
+                        validate: (v: string) => {
+                          if (!v) return true;
+                          const cleaned = String(v || '').replace(/\D/g, '');
+                          if (cleaned.length !== 9) return 'El número adicional debe tener 9 dígitos';
+                          if (!/^9/.test(cleaned)) return 'El número debe comenzar con 9';
+                          return true;
+                        },
+                        onBlur: (e: any) => {
+                          const v = String(e.target.value || '').replace(/\D/g, '');
+                          if (!v) return;
+                          if (v.length !== 9 || !/^9/.test(v)) {
+                            toast.error('Teléfono adicional inválido: debe tener 9 dígitos y comenzar con 9');
+                          }
+                        },
+                      })}
+                      className={errors.additionalPhone ? 'h-12 pl-[72px] border-2 border-red-500 rounded-xl' : 'h-12 pl-[72px] border-2 border-gray-200 focus:border-accent rounded-xl'}
+                    />
+                    {errors.additionalPhone?.message && <p className="text-sm text-red-600 mt-2">{String(errors.additionalPhone.message)}</p>}
                   </div>
                 </div>
               </div>
@@ -1106,8 +1362,8 @@ export default function App() {
                 {/* ID Front */}
                 <div className="space-y-3">
                   <Label htmlFor="idFront" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Identificación (Frente) <span className="text-accent">*</span>
-                  </Label>
+                      <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Identificación (Frente)
+                    </Label>
                   <div className="relative group">
                     <input id="idFront" type="file" accept="image/jpeg,image/png" capture="environment" {...idFrontRegister} ref={(el) => { idFrontRegister.ref(el); idFrontFileInputRef.current = el; }} className="hidden" />
                     <label htmlFor="idFront" onClick={() => { if (idFrontFileInputRef.current) idFrontFileInputRef.current.value = ''; }} className="flex items-center justify-center gap-3 h-14 bg-gradient-to-r from-accent to-accent/90 hover:from-accent/90 hover:to-accent text-white rounded-xl cursor-pointer shadow-md font-semibold">
@@ -1121,7 +1377,7 @@ export default function App() {
                 {/* ID Back */}
                 <div className="space-y-3">
                   <Label htmlFor="idBack" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Identificación (Reverso) <span className="text-accent">*</span>
+                    <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Identificación (Reverso)
                   </Label>
                   <div className="relative group">
                     <input id="idBack" type="file" accept="image/jpeg,image/png" capture="environment" disabled={!hasIdFront} {...idBackRegister} ref={(el) => { idBackRegister.ref(el); idBackFileInputRef.current = el; }} className="hidden" />
@@ -1136,10 +1392,10 @@ export default function App() {
                 {/* Address Proof */}
                 <div className="space-y-3">
                   <Label htmlFor="addressProof" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Comprobante de Domicilio <span className="text-accent">*</span>
+                    <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Comprobante de Domicilio
                   </Label>
                   <div className="relative group">
-                    <input id="addressProof" type="file" accept="image/jpeg,image/png" capture="environment" {...register('addressProof', { required: 'Este campo es requerido', onChange: async (e) => { const files = e.target.files; if (files?.length) { const f = files[0]; if (!isAllowedImage(f)) { toast.error('Solo se permiten imágenes JPG o PNG'); if (e?.target) e.target.value = ''; setAddressProofName(''); try { setValue('addressProof', new DataTransfer().files); } catch (err) {} return; } const res = await checkImageResolution(f); if (!res.ok) { toast.error(`Resolución insuficiente: mínimo ${MIN_IMAGE_WIDTH}x${MIN_IMAGE_HEIGHT}px — imagen ${res.width}x${res.height}px`); if (e?.target) e.target.value = ''; setAddressProofName(''); try { setValue('addressProof', new DataTransfer().files); } catch (err) {} return; } setAddressProofName(f.name); } } })} className="hidden" />
+                    <input id="addressProof" type="file" accept="image/jpeg,image/png" capture="environment" {...register('addressProof', { onChange: async (e) => { const files = e.target.files; if (files?.length) { const f = files[0]; if (!isAllowedImage(f)) { toast.error('Solo se permiten imágenes JPG o PNG'); if (e?.target) e.target.value = ''; setAddressProofName(''); try { setValue('addressProof', new DataTransfer().files); } catch (err) {} return; } const res = await checkImageResolution(f); if (!res.ok) { toast.error(`Resolución insuficiente: mínimo ${MIN_IMAGE_WIDTH}x${MIN_IMAGE_HEIGHT}px — imagen ${res.width}x${res.height}px`); if (e?.target) e.target.value = ''; setAddressProofName(''); try { setValue('addressProof', new DataTransfer().files); } catch (err) {} return; } setAddressProofName(f.name); } } })} className="hidden" />
                     <label htmlFor="addressProof" className="flex items-center justify-center gap-3 h-14 bg-gradient-to-r from-accent to-accent/90 hover:from-accent/90 hover:to-accent text-white rounded-xl cursor-pointer shadow-md font-semibold">
                       <Upload className="w-5 h-5" /> {addressProofName ? 'Cambiar archivo' : 'Seleccionar archivo'}
                     </label>
