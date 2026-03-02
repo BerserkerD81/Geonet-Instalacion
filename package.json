@@ -19,7 +19,7 @@
     "clsx": "^2.1.1",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.563.0",
-    "minimatch": "^10.2.2",
+    "minimatch": "^10.2.4",
     "motion": "^12.29.2",
     "radix-ui": "^1.4.3",
     "react": "^19.2.0",

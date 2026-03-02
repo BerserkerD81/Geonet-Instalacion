@@ -28,7 +28,7 @@ let googleMapsLoadPromise: Promise<void> | null = null;
 const loadGoogleMapsPlaces = (apiKey: string) => {
   if (typeof window === 'undefined') return Promise.resolve();
   // Verificamos si las librerías necesarias ya están cargadas
-  if (window.google?.maps?.places && window.google?.maps?.marker) return Promise.resolve();
+  if (window.google?.maps?.marker) return Promise.resolve();
   if (googleMapsLoadPromise) return googleMapsLoadPromise;
 
   googleMapsLoadPromise = new Promise<void>((resolve, reject) => {
@@ -51,7 +51,7 @@ const loadGoogleMapsPlaces = (apiKey: string) => {
     // Se añade loading=async y la librería marker
     script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(
       apiKey,
-    )}&libraries=places,marker&loading=async&language=es&region=CL&callback=__onGoogleMapsLoaded`;
+    )}&libraries=marker&loading=async&language=es&region=CL&callback=__onGoogleMapsLoaded`;
     document.head.appendChild(script);
   });
 
@@ -82,9 +82,9 @@ interface FormData {
 }
 
 export default function App() {
-  const { register, handleSubmit, formState: { errors }, reset, setValue, watch, control, clearErrors, trigger } = useForm<FormData>();
+  const { register, handleSubmit, formState: { errors }, setValue, watch, control, clearErrors, trigger } = useForm<FormData>();
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
+  const submitted = false;
   const [submitErrorMsg, setSubmitErrorMsg] = useState<string | null>(null);
   const [submissionStatus, setSubmissionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   
@@ -101,8 +101,6 @@ export default function App() {
   const [addressProofName, setAddressProofName] = useState<string>('');
   const [idFrontError, setIdFrontError] = useState<string>('');
   const [idBackError, setIdBackError] = useState<string>('');
-  const [addressProofError, setAddressProofError] = useState<string>('');
-  const [couponName, setCouponName] = useState<string>('');
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
   const inferInitialCategory = () => {
     try {
@@ -128,12 +126,6 @@ export default function App() {
   const planValue = watch('plan');
   const hasIdFront = Boolean(idFrontName) || ((idFrontFiles?.length ?? 0) > 0);
   const submitMsgRef = useRef<HTMLDivElement | null>(null);
-
-  const fileToFileList = (file: File) => {
-    const dt = new DataTransfer();
-    dt.items.add(file);
-    return dt.files;
-  };
 
   const scrollToField = (fieldName?: string) => {
     try {
@@ -250,92 +242,9 @@ export default function App() {
     },
   });
 
-  const addressInputRef = useRef<HTMLInputElement | null>(null);
-  const autocompleteInstance = useRef<any>(null);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
-  // Refs para evitar repetir notificaciones de autocorrección
-  const phoneAutoCorrectedRef = useRef(false);
-  const addPhoneAutoCorrectedRef = useRef(false);
-
-  // Inicializar Autocomplete con la nueva API (PlaceAutocomplete)
-  useEffect(() => {
-    let cancelled = false;
-
-    const initAutocomplete = async () => {
-      try {
-        const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
-        const runtimeKey = window.__ENV__?.VITE_GOOGLE_MAPS_API_KEY;
-        const effectiveKey = apiKey || runtimeKey;
-        if (!effectiveKey) {
-          console.error('Falta VITE_GOOGLE_MAPS_API_KEY');
-          return;
-        }
-
-        await loadGoogleMapsPlaces(effectiveKey);
-        if (cancelled) return;
-
-        if (!addressInputRef.current) return;
-
-        const Places = window.google?.maps?.places || {};
-
-        // Intentar con la nueva API: PlaceAutocomplete
-        if (Places.PlaceAutocomplete) {
-          const ac = new Places.PlaceAutocomplete(addressInputRef.current, {
-            componentRestrictions: { country: 'cl' },
-            fields: ['address_components', 'geometry', 'formatted_address'],
-            types: ['geocode'],
-          });
-          autocompleteInstance.current = ac;
-          ac.addListener('place_changed', () => {
-            const place = ac.getPlace();
-            fillAddressForm(place);
-            if (place?.geometry?.location) {
-              const lat = typeof place.geometry.location.lat === 'function' ? place.geometry.location.lat() : place.geometry.location.lat;
-              const lng = typeof place.geometry.location.lng === 'function' ? place.geometry.location.lng() : place.geometry.location.lng;
-              if (!mapInstanceRef.current && mapContainerRef.current) {
-                initMiniMap().then(() => updateMapMarker(lat, lng));
-              } else {
-                updateMapMarker(lat, lng);
-              }
-            }
-          });
-        } 
-        // Fallback al antiguo Autocomplete (solo si no existe PlaceAutocomplete)
-        else if (Places.Autocomplete) {
-          const ac = new Places.Autocomplete(addressInputRef.current, {
-            componentRestrictions: { country: 'cl' },
-            fields: ['address_components', 'geometry', 'formatted_address'],
-            types: ['geocode'],
-          });
-          autocompleteInstance.current = ac;
-          ac.addListener('place_changed', () => {
-            const place = ac.getPlace();
-            fillAddressForm(place);
-            if (place?.geometry?.location) {
-              const lat = typeof place.geometry.location.lat === 'function' ? place.geometry.location.lat() : place.geometry.location.lat;
-              const lng = typeof place.geometry.location.lng === 'function' ? place.geometry.location.lng() : place.geometry.location.lng;
-              if (!mapInstanceRef.current && mapContainerRef.current) {
-                initMiniMap().then(() => updateMapMarker(lat, lng));
-              } else {
-                updateMapMarker(lat, lng);
-              }
-            }
-          });
-        } else {
-          console.warn('No se encontró ninguna API de autocompletado de Google Maps');
-        }
-      } catch (error) {
-        console.error('Error cargando Google Maps Places Library', error);
-      }
-    };
-
-    void initAutocomplete();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   const getEffectiveGoogleKey = () => {
     const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
@@ -385,42 +294,7 @@ export default function App() {
   };
 
   const reverseGeocodeAndFill = async (lat: number, lng: number) => {
-    try {
-      if (!window.google?.maps?.Geocoder) return;
-      
-      const geocoder = new window.google.maps.Geocoder();
-      const res = await new Promise<any>((resolve, reject) =>
-        geocoder.geocode({ location: { lat, lng } }, (results: any, status: any) => {
-          if (status === 'OK') resolve(results); else reject(status);
-        }),
-      );
-      const place = Array.isArray(res) && res.length > 0 ? res[0] : null;
-      if (!place) return;
-
-      const formatted = place.formatted_address as string | undefined;
-      if (formatted) {
-        setValue('address', formatted.split(',')[0]);
-        if (addressInputRef.current) addressInputRef.current.value = formatted.split(',')[0];
-      }
-
-      const components = place.address_components || [];
-      const getComponent = (types: string[]) =>
-        components.find((c: any) => types.every((t: string) => c.types.includes(t)))?.long_name;
-
-      const cityVal =
-        getComponent(['locality']) || getComponent(['administrative_area_level_2']) || getComponent(['administrative_area_level_1']);
-      const neighborhoodVal = getComponent(['sublocality']) || getComponent(['neighborhood']) || getComponent(['sublocality_level_1']);
-      const postalCodeVal = getComponent(['postal_code']);
-
-      if (cityVal) setValue('city', cityVal);
-      if (neighborhoodVal) setValue('neighborhood', neighborhoodVal);
-      if (postalCodeVal) setValue('postalCode', postalCodeVal);
-
-      setValue('coordinates', `${lat.toFixed(6)}, ${lng.toFixed(6)}`, { shouldValidate: true });
-    } catch (e) {
-      // Si falla geocodificación inversa, al menos guardamos las coordenadas
-      setValue('coordinates', `${lat.toFixed(6)}, ${lng.toFixed(6)}`, { shouldValidate: true });
-    }
+    setValue('coordinates', `${lat.toFixed(6)}, ${lng.toFixed(6)}`, { shouldValidate: true });
   };
 
   const initMiniMap = async () => {
@@ -606,46 +480,6 @@ export default function App() {
       setIsLocating(false);
     }
   };
-
-  const fillAddressForm = (place: any) => {
-    if (!place.geometry || !place.geometry.location) {
-      toast.error('No se encontraron detalles para esta dirección');
-      return;
-    }
-
-    const loc = place.geometry.location;
-    const latNum = typeof loc.lat === 'function' ? loc.lat() : loc.lat;
-    const lngNum = typeof loc.lng === 'function' ? loc.lng() : loc.lng;
-    
-    setValue('coordinates', `${latNum.toFixed(6)}, ${lngNum.toFixed(6)}`, { shouldValidate: true });
-
-    if (place.formatted_address) {
-       setValue('address', place.formatted_address.split(',')[0]);
-    }
-
-    const components = place.address_components || [];
-    const getComponent = (types: string[]) =>
-      components.find((c: any) => types.every((t: string) => c.types.includes(t)))?.long_name;
-
-    const cityVal =
-      getComponent(['locality']) ||
-      getComponent(['administrative_area_level_2']) ||
-      getComponent(['administrative_area_level_1']);
-
-    const neighborhoodVal =
-      getComponent(['sublocality']) ||
-      getComponent(['neighborhood']) ||
-      getComponent(['sublocality_level_1']);
-
-    const postalCodeVal = getComponent(['postal_code']);
-
-    if (cityVal) setValue('city', cityVal);
-    if (neighborhoodVal) setValue('neighborhood', neighborhoodVal);
-    if (postalCodeVal) setValue('postalCode', postalCodeVal);
-
-    toast.success('Dirección seleccionada');
-  };
-
 
   const getValidDates = () => {
     const dates: {date: Date, formatted: string}[] = [];
@@ -1154,7 +988,7 @@ export default function App() {
                 </div>
                 <div>
                   <h3 className="text-2xl font-bold">Dirección de Instalación</h3>
-                  <p className="text-sm text-white/80">Dónde instalaremos tu servicio</p>
+                  <p className="text-sm text-white/80">Dónde instalaremos tu servicio Requerimos que introduzcas tu dirección Y la confirmes en el mapa para una mayor precisión.</p>
                 </div>
               </div>
             </div>
@@ -1173,10 +1007,7 @@ export default function App() {
                         autoComplete="off"
                         placeholder="Ej. Calle Principal #123, entre Av. Libertad"
                         {...addressRest}
-                        ref={(e) => {
-                          addressHookRef(e);
-                          addressInputRef.current = e;
-                        }}
+                        ref={addressHookRef}
                         className="h-12 border-2 border-gray-200 focus:border-accent rounded-xl"
                       />
                     </div>
@@ -1216,9 +1047,6 @@ export default function App() {
                                         Interactuar
                                       </button>
                                     )}
-                                    {isMobile && mapInteractionEnabled && (
-                                      <div className="absolute right-3 top-3 bg-white/90 text-gray-700 px-3 py-2 rounded-lg shadow-sm text-sm">Interactuando</div>
-                                    )}
                                   </div>
                   </div>
                 </div>
@@ -1231,7 +1059,7 @@ export default function App() {
                 </Label>
                 <Input id="coordinates" placeholder="-17.783299, -63.182140" {...register('coordinates', { required: 'Este campo es requerido' })} className="h-12 border-2 border-gray-200 focus:border-accent rounded-xl" />
                 {errors.coordinates && <p className="text-sm text-destructive">{errors.coordinates.message}</p>}
-                <p className="text-xs text-gray-500">Se completa automáticamente al seleccionar una dirección.</p>
+                <p className="text-xs text-gray-500">Se completa automáticamente al fijar una ubicación en el mapa.</p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
@@ -1475,7 +1303,6 @@ export default function App() {
                       <Upload className="w-5 h-5" /> {addressProofName ? 'Cambiar archivo' : 'Seleccionar archivo'}
                     </label>
                     <p className="text-xs text-gray-500 mt-2">Requerimientos: JPG/JPEG/PNG · Mínimo {MIN_IMAGE_WIDTH}×{MIN_IMAGE_HEIGHT} px</p>
-                    {addressProofError && <p className="text-sm text-destructive mt-2">{addressProofError}</p>}
                   </div>
                   {errors.addressProof && <p className="text-sm text-destructive">{errors.addressProof.message}</p>}
                 </div>
