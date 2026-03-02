@@ -406,75 +406,108 @@ export default function App() {
   // 3. Manejador Principal
   const handleUseGeolocation = async () => {
     setIsLocating(true);
-    
+
     // Helper para procesar ubicación encontrada
     const processFoundLocation = async (lat: number, lng: number, msg: string) => {
-        try { await ensureMapsLoaded(); } catch(e) {}
-        
-        if (!mapInstanceRef.current && mapContainerRef.current) {
-            await initMiniMap();
+      try { await ensureMapsLoaded(); } catch (_e) {}
+      if (!mapInstanceRef.current && mapContainerRef.current) {
+        await initMiniMap();
+      }
+      updateMapMarker(lat, lng);
+      await reverseGeocodeAndFill(lat, lng);
+      toast.success(msg);
+    };
+
+    /**
+     * Mejora de precisión: usa watchPosition durante hasta `maxMs` ms y
+     * retiene la lectura con el menor radio de incertidumbre (accuracy más bajo).
+     * Resuelve inmediatamente si se obtiene una lectura con accuracy <= `targetAccuracy`.
+     */
+    const getBestPosition = (maxMs = 10000, targetAccuracy = 30): Promise<GeolocationPosition> => {
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) {
+          reject(new Error("No support"));
+          return;
         }
-        
-        updateMapMarker(lat, lng);
-        await reverseGeocodeAndFill(lat, lng);
-        toast.success(msg);
+
+        let best: GeolocationPosition | null = null;
+        let watchId: number;
+
+        const done = (pos: GeolocationPosition) => {
+          navigator.geolocation.clearWatch(watchId);
+          resolve(pos);
+        };
+
+        const timeout = setTimeout(() => {
+          navigator.geolocation.clearWatch(watchId);
+          if (best) resolve(best);
+          else reject(new Error("Timeout sin lectura GPS"));
+        }, maxMs);
+
+        watchId = navigator.geolocation.watchPosition(
+          (pos) => {
+            if (!best || pos.coords.accuracy < best.coords.accuracy) {
+              best = pos;
+            }
+            // Resolución anticipada si ya es suficientemente precisa
+            if (pos.coords.accuracy <= targetAccuracy) {
+              clearTimeout(timeout);
+              done(pos);
+            }
+          },
+          (err) => {
+            clearTimeout(timeout);
+            navigator.geolocation.clearWatch(watchId);
+            reject(err);
+          },
+          { enableHighAccuracy: true, timeout: maxMs, maximumAge: 0 }
+        );
+      });
     };
 
     try {
-      // PLAN A: Intentar GPS del Navegador (Alta precisión)
-      const getPosition = (opts: PositionOptions): Promise<GeolocationPosition> => {
-          return new Promise((resolve, reject) => {
-              if (!navigator.geolocation) return reject(new Error("No support"));
-              navigator.geolocation.getCurrentPosition(resolve, reject, opts);
-          });
+      // PLAN A: watchPosition acumulando lecturas hasta 10 s, objetivo <= 30 m de precision
+      const pos = await getBestPosition(10000, 30);
+      const accuracy = Math.round(pos.coords.accuracy);
+      const msg = accuracy <= 30
+        ? `Ubicación GPS de alta precisión (±${accuracy} m)`
+        : accuracy <= 100
+          ? `Ubicación GPS obtenida (±${accuracy} m)`
+          : `Ubicación GPS aproximada (±${accuracy} m) — ajusta el pin si es necesario`;
+
+      await processFoundLocation(pos.coords.latitude, pos.coords.longitude, msg);
+
+      if (accuracy > 100) {
+        toast.warning(`Precisión GPS limitada (±${accuracy} m). Puedes mover el pin manualmente.`);
       }
-      
-      // Timeout corto (3s) para no hacer esperar si el navegador falla
-      const pos = await getPosition({ enableHighAccuracy: true, timeout: 7000, maximumAge: 0 });
-      await processFoundLocation(pos.coords.latitude, pos.coords.longitude, 'Ubicación GPS encontrada');
 
     } catch (browserError: any) {
-      console.warn("Navegador falló, intentando fallback de baja precisión...", browserError);
+      console.warn("GPS del navegador falló:", browserError?.code, browserError?.message);
 
-      // Intentar segunda lectura con menor precisión antes de usar Google API
-      try {
-        const getPosition = (opts: PositionOptions): Promise<GeolocationPosition> => {
-          return new Promise((resolve, reject) => {
-            if (!navigator.geolocation) return reject(new Error("No support"));
-            navigator.geolocation.getCurrentPosition(resolve, reject, opts);
-          });
-        };
-        const pos2 = await getPosition({ enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 });
-        await processFoundLocation(pos2.coords.latitude, pos2.coords.longitude, 'Ubicación GPS (baja precisión) encontrada');
-        setIsLocating(false);
-        return;
-      } catch (secondaryError) {
-        console.warn('Fallback de baja precisión falló, intentando Google API...', secondaryError);
-      }
-
-      // PLAN B: Google Geolocation API (Ideal para Desktop sin GPS)
+      // PLAN B: Google Geolocation API — usa WiFi/celular, mucho más preciso que IP en desktop
       try {
         const googleLoc = await fetchGoogleGeolocation();
         if (googleLoc) {
-           await processFoundLocation(googleLoc.lat, googleLoc.lng, 'Ubicación detectada por Google');
-           setIsLocating(false);
-           return;
+          await processFoundLocation(googleLoc.lat, googleLoc.lng, 'Ubicación detectada por red WiFi/celular');
+          toast.warning('Precisión WiFi (~50-300 m). Verifica el pin en el mapa.');
+          setIsLocating(false);
+          return;
         }
       } catch (googleError) {
-         console.warn("Google API falló, intentando IP...");
+        console.warn("Google Geolocation API falló:", googleError);
       }
 
-      // PLAN C: IP (Baja precisión)
+      // PLAN C: IP — último recurso, solo ciudad/ISP
       try {
-          const ipLoc = await fetchIPLocation();
-          if (ipLoc) {
-             await processFoundLocation(ipLoc.lat, ipLoc.lng, 'Ubicación aproximada (ISP)');
-             toast.warning('Ubicación aproximada. Verifica en el mapa.');
-          } else {
-             toast.error('No se pudo obtener la ubicación.');
-          }
-      } catch (ipError) {
-          toast.error('Error al detectar ubicación. Ingrésala manualmente.');
+        const ipLoc = await fetchIPLocation();
+        if (ipLoc) {
+          await processFoundLocation(ipLoc.lat, ipLoc.lng, 'Ubicación aproximada por IP');
+          toast.warning('Ubicación muy aproximada (ciudad). Mueve el pin a tu dirección real.');
+        } else {
+          toast.error('No se pudo detectar la ubicación. Ingrésala manualmente en el mapa.');
+        }
+      } catch (_ipError) {
+        toast.error('Error al detectar ubicación. Ingrésala manualmente.');
       }
     } finally {
       setIsLocating(false);
