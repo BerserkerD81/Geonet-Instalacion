@@ -28,7 +28,7 @@ let googleMapsLoadPromise: Promise<void> | null = null;
 const loadGoogleMapsPlaces = (apiKey: string) => {
   if (typeof window === 'undefined') return Promise.resolve();
   // Verificamos si las librerías necesarias ya están cargadas
-  if (window.google?.maps?.marker) return Promise.resolve();
+  if (window.google?.maps?.marker && window.google?.maps?.places) return Promise.resolve();
   if (googleMapsLoadPromise) return googleMapsLoadPromise;
 
   googleMapsLoadPromise = new Promise<void>((resolve, reject) => {
@@ -51,12 +51,18 @@ const loadGoogleMapsPlaces = (apiKey: string) => {
     // Se añade loading=async y la librería marker
     script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(
       apiKey,
-    )}&libraries=marker&loading=async&language=es&region=CL&callback=__onGoogleMapsLoaded`;
+    )}&libraries=marker,places&loading=async&language=es&region=CL&callback=__onGoogleMapsLoaded`;
     document.head.appendChild(script);
   });
 
   return googleMapsLoadPromise;
 };
+
+interface GooglePrediction {
+  place_id: string;
+  description: string;
+  structured_formatting: { main_text: string; secondary_text: string };
+}
 
 interface FormData {
   firstName: string;
@@ -91,17 +97,14 @@ export default function App() {
   // Estado para controlar el loading del botón de ubicación
   const [isLocating, setIsLocating] = useState(false);
 
-  const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-
-  // Control para interacción del mapa en móvil
-  const [mapInteractionEnabled, setMapInteractionEnabled] = useState<boolean>(() => !isMobile);
-
   const [idFrontName, setIdFrontName] = useState<string>('');
   const [idBackName, setIdBackName] = useState<string>('');
   const [addressProofName, setAddressProofName] = useState<string>('');
   const [idFrontError, setIdFrontError] = useState<string>('');
   const [idBackError, setIdBackError] = useState<string>('');
   const [selectedDates, setSelectedDates] = useState<string[]>([]);
+  const [addressSuggestions, setAddressSuggestions] = useState<GooglePrediction[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const inferInitialCategory = () => {
     try {
       const params = new URLSearchParams(window.location.search);
@@ -245,6 +248,7 @@ export default function App() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
+  const suggestDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const getEffectiveGoogleKey = () => {
     const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
@@ -293,8 +297,67 @@ export default function App() {
     }
   };
 
-  const reverseGeocodeAndFill = async (lat: number, lng: number) => {
+  // Solo actualiza coordenadas — el cliente controla su dirección escrita
+  // y puede afinar el pin en el mapa libremente sin que nada lo sobreescriba.
+  const reverseGeocodeAndFill = (lat: number, lng: number) => {
     setValue('coordinates', `${lat.toFixed(6)}, ${lng.toFixed(6)}`, { shouldValidate: true });
+  };
+
+  // --- AUTOCOMPLETADO DE DIRECCIÓN CON GOOGLE PLACES ---
+  const searchAddress = async (query: string) => {
+    try {
+      await ensureMapsLoaded();
+      const service = new window.google.maps.places.AutocompleteService();
+      service.getPlacePredictions(
+        {
+          input: query,
+          language: 'es',
+          componentRestrictions: { country: 'cl' },
+          types: ['geocode'],
+        },
+        (predictions: GooglePrediction[] | null, status: string) => {
+          if (status === 'OK' && predictions) {
+            setAddressSuggestions(predictions);
+            setShowSuggestions(true);
+          } else {
+            setAddressSuggestions([]);
+            setShowSuggestions(false);
+          }
+        }
+      );
+    } catch (e) {
+      console.warn('Google Places autocomplete error:', e);
+    }
+  };
+
+  // Al elegir una sugerencia solo se mueve el mapa y se actualizan las coordenadas.
+  // El texto de dirección que escribió el cliente NO se toca.
+  const pickSuggestion = async (pred: GooglePrediction) => {
+    setShowSuggestions(false);
+    setAddressSuggestions([]);
+
+    try {
+      await ensureMapsLoaded();
+      if (!mapInstanceRef.current && mapContainerRef.current) await initMiniMap();
+
+      // Necesitamos un div fantasma para PlacesService (requiere DOM o mapa)
+      const service = new window.google.maps.places.PlacesService(
+        mapInstanceRef.current || document.createElement('div')
+      );
+      service.getDetails(
+        { placeId: pred.place_id, fields: ['geometry'] },
+        (place: any, status: string) => {
+          if (status === 'OK' && place?.geometry?.location) {
+            const lat = place.geometry.location.lat();
+            const lng = place.geometry.location.lng();
+            setValue('coordinates', `${lat.toFixed(6)}, ${lng.toFixed(6)}`, { shouldValidate: true });
+            updateMapMarker(lat, lng);
+          }
+        }
+      );
+    } catch (e) {
+      console.warn('Google Places getDetails error:', e);
+    }
   };
 
   const initMiniMap = async () => {
@@ -312,16 +375,20 @@ export default function App() {
 
       const defaultCenter = { lat: -35.4269, lng: -71.6554 };
       
+      const onMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+
       // mapId es necesario para AdvancedMarkerElement. 'DEMO_MAP_ID' es válido para desarrollo.
       mapInstanceRef.current = new window.google.maps.Map(mapContainerRef.current, {
         center: defaultCenter,
         zoom: 13,
-        zoomControl: true,
-        fullscreenControl: true,
+        // En móvil se ocultan los controles para liberar espacio; el mapa sigue siendo
+        // completamente funcional (pellizco, arrastre, clic para mover el pin).
+        zoomControl: !onMobile,
+        fullscreenControl: !onMobile,
         streetViewControl: false,
         mapTypeControl: false,
         clickableIcons: false,
-        gestureHandling: mapInteractionEnabled ? 'greedy' : (isMobile ? 'cooperative' : 'auto'),
+        gestureHandling: 'greedy',
         mapId: 'DEMO_MAP_ID',
       });
 
@@ -331,17 +398,6 @@ export default function App() {
         updateMapMarker(lat, lng);
         void reverseGeocodeAndFill(lat, lng);
       });
-
-      // Si el usuario toca el mapa en móvil, habilitamos interacción (pellizcar/arrastrar)
-      if (isMobile && mapContainerRef.current) {
-        const onTouch = () => {
-          try {
-            if (mapInstanceRef.current) mapInstanceRef.current.setOptions({ gestureHandling: 'greedy' });
-            setMapInteractionEnabled(true);
-          } catch (e) {}
-        };
-        mapContainerRef.current.addEventListener('touchstart', onTouch, { passive: true, once: true });
-      }
 
       const coords = (watch('coordinates') || '') as string;
       if (coords) {
@@ -361,34 +417,9 @@ export default function App() {
   }, [mapContainerRef.current]);
 
 
-  // --- ESTRATEGIA DE GEOLOCALIZACIÓN DE 3 NIVELES ---
+  // --- GEOLOCALIZACIÓN ---
 
-  // 1. Google Geolocation API (Requiere habilitar "Geolocation API" en Google Cloud)
-  const fetchGoogleGeolocation = async (): Promise<{ lat: number; lng: number } | null> => {
-    try {
-      const apiKey = getEffectiveGoogleKey();
-      if (!apiKey) return null;
-
-      const res = await fetch(`https://www.googleapis.com/geolocation/v1/geolocate?key=${apiKey}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ considerIp: true }), 
-      });
-
-      if (!res.ok) return null;
-      
-      const data = await res.json();
-      if (data.location) {
-        return { lat: data.location.lat, lng: data.location.lng };
-      }
-      return null;
-    } catch (e) {
-      console.error("Error en Google Geolocation API:", e);
-      return null;
-    }
-  };
-
-  // 2. IP Fallback (Último recurso)
+  // Fallback por IP (último recurso cuando no hay GPS ni señal)
   const fetchIPLocation = async (): Promise<{ lat: number; lng: number } | null> => {
     try {
       const res = await fetch('https://ipapi.co/json/');
@@ -403,111 +434,139 @@ export default function App() {
     }
   };
 
-  // 3. Manejador Principal
+  // 3. Manejador Principal — estrategia en 2 fases + mensajes claros
   const handleUseGeolocation = async () => {
     setIsLocating(true);
 
-    // Helper para procesar ubicación encontrada
-    const processFoundLocation = async (lat: number, lng: number, msg: string) => {
+    const applyPosition = async (lat: number, lng: number) => {
       try { await ensureMapsLoaded(); } catch (_e) {}
-      if (!mapInstanceRef.current && mapContainerRef.current) {
-        await initMiniMap();
-      }
+      if (!mapInstanceRef.current && mapContainerRef.current) await initMiniMap();
       updateMapMarker(lat, lng);
-      await reverseGeocodeAndFill(lat, lng);
-      toast.success(msg);
+      reverseGeocodeAndFill(lat, lng);
     };
 
-    /**
-     * Mejora de precisión: usa watchPosition durante hasta `maxMs` ms y
-     * retiene la lectura con el menor radio de incertidumbre (accuracy más bajo).
-     * Resuelve inmediatamente si se obtiene una lectura con accuracy <= `targetAccuracy`.
-     */
-    const getBestPosition = (maxMs = 10000, targetAccuracy = 30): Promise<GeolocationPosition> => {
-      return new Promise((resolve, reject) => {
-        if (!navigator.geolocation) {
-          reject(new Error("No support"));
-          return;
-        }
+    if (!navigator.geolocation) {
+      toast.error('Tu navegador no soporta geolocalización.');
+      setIsLocating(false);
+      return;
+    }
 
+    // Intenta obtener posición con una configuración dada.
+    // Devuelve { pos, err } en vez de throw para control explícito del código de error.
+    const tryPosition = (opts: PositionOptions): Promise<{ pos: GeolocationPosition | null; errCode: number }> =>
+      new Promise((resolve) => {
+        navigator.geolocation.getCurrentPosition(
+          (pos) => resolve({ pos, errCode: 0 }),
+          (err) => resolve({ pos: null, errCode: err.code }),
+          opts
+        );
+      });
+
+    // Refinamiento con watchPosition (solo si ya sabemos que el dispositivo tiene GPS).
+    const refinePosition = (maxMs = 25_000, targetAccuracy = 50): Promise<GeolocationPosition> =>
+      new Promise((resolve, reject) => {
         let best: GeolocationPosition | null = null;
         let watchId: number;
 
-        const done = (pos: GeolocationPosition) => {
+        const finish = (pos: GeolocationPosition) => {
           navigator.geolocation.clearWatch(watchId);
           resolve(pos);
         };
 
-        const timeout = setTimeout(() => {
+        const timer = setTimeout(() => {
           navigator.geolocation.clearWatch(watchId);
           if (best) resolve(best);
-          else reject(new Error("Timeout sin lectura GPS"));
+          else reject({ code: 2 });
         }, maxMs);
 
         watchId = navigator.geolocation.watchPosition(
           (pos) => {
-            if (!best || pos.coords.accuracy < best.coords.accuracy) {
-              best = pos;
-            }
-            // Resolución anticipada si ya es suficientemente precisa
+            if (!best || pos.coords.accuracy < best.coords.accuracy) best = pos;
             if (pos.coords.accuracy <= targetAccuracy) {
-              clearTimeout(timeout);
-              done(pos);
+              clearTimeout(timer);
+              finish(pos);
             }
           },
           (err) => {
-            clearTimeout(timeout);
+            clearTimeout(timer);
             navigator.geolocation.clearWatch(watchId);
-            reject(err);
+            // Si ya tenemos una lectura, úsala en vez de rechazar
+            if (best) resolve(best);
+            else reject(err);
           },
-          { enableHighAccuracy: true, timeout: maxMs, maximumAge: 0 }
+          { enableHighAccuracy: true, maximumAge: 0, timeout: maxMs }
         );
       });
-    };
 
     try {
-      // PLAN A: watchPosition acumulando lecturas hasta 10 s, objetivo <= 30 m de precision
-      const pos = await getBestPosition(10000, 30);
-      const accuracy = Math.round(pos.coords.accuracy);
-      const msg = accuracy <= 30
-        ? `Ubicación GPS de alta precisión (±${accuracy} m)`
-        : accuracy <= 100
-          ? `Ubicación GPS obtenida (±${accuracy} m)`
-          : `Ubicación GPS aproximada (±${accuracy} m) — ajusta el pin si es necesario`;
+      // --- FASE 1: posición rápida (WiFi/celda/caché, ≤ 4 s) ---
+      const { pos: coarse, errCode: coarseErr } = await tryPosition(
+        { enableHighAccuracy: false, maximumAge: 60_000, timeout: 4_000 }
+      );
 
-      await processFoundLocation(pos.coords.latitude, pos.coords.longitude, msg);
-
-      if (accuracy > 100) {
-        toast.warning(`Precisión GPS limitada (±${accuracy} m). Puedes mover el pin manualmente.`);
+      if (coarseErr === 1 /* PERMISSION_DENIED */) {
+        toast.error('Permiso de ubicación denegado.', {
+          description: 'Activa la ubicación en la configuración del navegador e intenta de nuevo.',
+          duration: 6000,
+        });
+        setIsLocating(false);
+        return;
       }
 
-    } catch (browserError: any) {
-      console.warn("GPS del navegador falló:", browserError?.code, browserError?.message);
+      if (coarseErr === 2 /* POSITION_UNAVAILABLE — sin GPS ni señal */) {
+        // No tiene sentido intentar refinar; ir directo a fallback por IP
+        throw { code: 2 };
+      }
 
-      // PLAN B: Google Geolocation API — usa WiFi/celular, mucho más preciso que IP en desktop
+      if (coarse) {
+        await applyPosition(coarse.coords.latitude, coarse.coords.longitude);
+        const acc = Math.round(coarse.coords.accuracy);
+        toast.info(`Ubicación inicial ±${acc} m. Mejorando precisión…`, { duration: 3000 });
+      }
+
+      // --- FASE 2: refinamiento GPS (hasta 25 s, objetivo ≤ 50 m) ---
       try {
-        const googleLoc = await fetchGoogleGeolocation();
-        if (googleLoc) {
-          await processFoundLocation(googleLoc.lat, googleLoc.lng, 'Ubicación detectada por red WiFi/celular');
-          toast.warning('Precisión WiFi (~50-300 m). Verifica el pin en el mapa.');
-          setIsLocating(false);
-          return;
+        const refined = await refinePosition(25_000, 50);
+        const coarseAcc = coarse ? coarse.coords.accuracy : Infinity;
+        if (refined.coords.accuracy < coarseAcc) {
+          await applyPosition(refined.coords.latitude, refined.coords.longitude);
         }
-      } catch (googleError) {
-        console.warn("Google Geolocation API falló:", googleError);
-      }
-
-      // PLAN C: IP — último recurso, solo ciudad/ISP
-      try {
-        const ipLoc = await fetchIPLocation();
-        if (ipLoc) {
-          await processFoundLocation(ipLoc.lat, ipLoc.lng, 'Ubicación aproximada por IP');
-          toast.warning('Ubicación muy aproximada (ciudad). Mueve el pin a tu dirección real.');
+        const acc = Math.round(refined.coords.accuracy);
+        if (acc <= 20) {
+          toast.success(`GPS de alta precisión ±${acc} m`);
+        } else if (acc <= 80) {
+          toast.success(`Ubicación GPS ±${acc} m`);
         } else {
-          toast.error('No se pudo detectar la ubicación. Ingrésala manualmente en el mapa.');
+          toast.success(`Ubicación obtenida ±${acc} m`);
+          toast.warning('Precisión limitada. Puedes ajustar el pin en el mapa.');
         }
-      } catch (_ipError) {
-        toast.error('Error al detectar ubicación. Ingrésala manualmente.');
+      } catch (_refineErr) {
+        // El refinamiento falló pero ya tenemos la posición de fase 1 aplicada
+        if (coarse) {
+          toast.success(`Ubicación obtenida ±${Math.round(coarse.coords.accuracy)} m`);
+        }
+      }
+
+    } catch (err: any) {
+      const code: number = err?.code ?? 0;
+
+      // Permiso denegado ya fue manejado arriba, pero por si acaso
+      if (code === 1) {
+        toast.error('Permiso de ubicación denegado.', {
+          description: 'Activa la ubicación en la configuración del navegador.',
+          duration: 6000,
+        });
+        setIsLocating(false);
+        return;
+      }
+
+      // POSITION_UNAVAILABLE o cualquier otro error → fallback por IP
+      const ipLoc = await fetchIPLocation();
+      if (ipLoc) {
+        await applyPosition(ipLoc.lat, ipLoc.lng);
+        toast.warning('No se detectó GPS. Ubicación aproximada por ciudad — ajusta el pin.', { duration: 7000 });
+      } else {
+        toast.error('No se pudo detectar la ubicación. Escríbela o fija el pin en el mapa.');
       }
     } finally {
       setIsLocating(false);
@@ -1034,15 +1093,45 @@ export default function App() {
 
                 <div className="relative">
                   <div className="flex gap-3 items-center">
-                    <div className="flex-1">
+                    <div className="flex-1 relative">
                       <Input
                         id="address"
-                        autoComplete="off"
+                        autoComplete="new-password"
+                        data-lpignore="true"
+                        data-form-type="other"
                         placeholder="Ej. Calle Principal #123, entre Av. Libertad"
                         {...addressRest}
                         ref={addressHookRef}
+                        onInput={(e) => {
+                          const val = (e.target as HTMLInputElement).value;
+                          if (suggestDebounceRef.current) clearTimeout(suggestDebounceRef.current);
+                          if (val.length >= 3) {
+                            suggestDebounceRef.current = setTimeout(() => void searchAddress(val), 420);
+                          } else {
+                            setShowSuggestions(false);
+                            setAddressSuggestions([]);
+                          }
+                        }}
+                        onBlur={() => { setTimeout(() => setShowSuggestions(false), 180); }}
+                        onFocus={() => { if (addressSuggestions.length > 0) setShowSuggestions(true); }}
                         className="h-12 border-2 border-gray-200 focus:border-accent rounded-xl"
                       />
+                      {showSuggestions && addressSuggestions.length > 0 && (
+                        <ul className="absolute z-50 left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-64 overflow-y-auto">
+                          {addressSuggestions.map((pred, i) => (
+                            <li
+                              key={pred.place_id ?? i}
+                              onMouseDown={() => void pickSuggestion(pred)}
+                              className="px-4 py-2.5 text-sm text-gray-700 hover:bg-accent/10 cursor-pointer border-b last:border-0 border-gray-100"
+                            >
+                              <span className="font-medium">{pred.structured_formatting.main_text}</span>
+                              {pred.structured_formatting.secondary_text && (
+                                <span className="text-gray-400 text-xs block">{pred.structured_formatting.secondary_text}</span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                     <div className="shrink-0">
                       <Button
@@ -1064,22 +1153,6 @@ export default function App() {
                     <div className="mt-3">
                                   <div className="relative">
                                     <div ref={(el) => { mapContainerRef.current = el; }} className="h-56 sm:h-72 md:h-96 rounded-xl border-2 border-gray-200 overflow-hidden" />
-                                    {/* Overlay button to enable map interaction on mobile */}
-                                    {isMobile && !mapInteractionEnabled && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          try {
-                                            if (mapInstanceRef.current) mapInstanceRef.current.setOptions({ gestureHandling: 'greedy' });
-                                          } catch (e) {}
-                                          setMapInteractionEnabled(true);
-                                        }}
-                                        className="absolute right-3 top-3 bg-white/90 text-gray-700 px-3 py-2 rounded-lg shadow-sm text-sm flex items-center gap-2"
-                                      >
-                                        <svg viewBox="0 0 24 24" className="w-4 h-4" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                                        Interactuar
-                                      </button>
-                                    )}
                                   </div>
                   </div>
                 </div>
