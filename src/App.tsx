@@ -154,6 +154,58 @@ const getConvexHull = (points: Array<{ lat: number; lng: number }>) => {
   return [...lower, ...upper];
 };
 
+const clampNumber = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+const approxDistanceMeters = (a: { lat: number; lng: number }, b: { lat: number; lng: number }) => {
+  const meanLatRad = ((a.lat + b.lat) / 2) * (Math.PI / 180);
+  const metersPerLat = 111_320;
+  const metersPerLng = Math.cos(meanLatRad) * 111_320;
+  const dLat = (a.lat - b.lat) * metersPerLat;
+  const dLng = (a.lng - b.lng) * metersPerLng;
+  return Math.hypot(dLat, dLng);
+};
+
+const filterZoneOutliers = (points: Array<{ lat: number; lng: number }>) => {
+  if (points.length < 5) return points;
+
+  const centroid = computeCentroid(points);
+  const distances = points
+    .map((point) => approxDistanceMeters(point, centroid))
+    .sort((a, b) => a - b);
+
+  const p90Index = Math.floor((distances.length - 1) * 0.9);
+  const p90 = distances[p90Index] || 0;
+  const maxAllowed = p90 * 1.35;
+
+  const filtered = points.filter((point) => approxDistanceMeters(point, centroid) <= maxAllowed);
+  return filtered.length >= 3 ? filtered : points;
+};
+
+const smoothClosedPath = (points: Array<{ lat: number; lng: number }>, iterations = 2) => {
+  if (points.length < 3) return points;
+
+  let current = [...points];
+  for (let i = 0; i < iterations; i += 1) {
+    const smoothed: Array<{ lat: number; lng: number }> = [];
+    for (let idx = 0; idx < current.length; idx += 1) {
+      const curr = current[idx];
+      const next = current[(idx + 1) % current.length];
+
+      smoothed.push({
+        lat: curr.lat * 0.75 + next.lat * 0.25,
+        lng: curr.lng * 0.75 + next.lng * 0.25,
+      });
+      smoothed.push({
+        lat: curr.lat * 0.25 + next.lat * 0.75,
+        lng: curr.lng * 0.25 + next.lng * 0.75,
+      });
+    }
+    current = smoothed;
+  }
+
+  return current;
+};
+
 const sanitizeZoneName = (value: unknown, zoneId: string) => {
   const raw = String(value ?? '').trim();
   if (!raw) return `Sector ${zoneId}`;
@@ -428,6 +480,8 @@ export default function App() {
   const [zonesCount, setZonesCount] = useState(0);
   const [zoneOptions, setZoneOptions] = useState<OdbZone[]>([]);
   const [selectedZoneKey, setSelectedZoneKey] = useState('');
+  const [zoneSearchTerm, setZoneSearchTerm] = useState('');
+  const [showZoneSuggestions, setShowZoneSuggestions] = useState(false);
 
   const getEffectiveGoogleKey = () => {
     const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
@@ -547,6 +601,20 @@ export default function App() {
     }
   };
 
+  const handleZoneSelection = (zone: OdbZone) => {
+    setSelectedZoneKey(zone.key);
+    setZoneSearchTerm(zone.zoneName);
+    setShowZoneSuggestions(false);
+    setValue('neighborhood', zone.zoneName, { shouldValidate: true, shouldDirty: true });
+    void focusMapOnZone(zone.key);
+  };
+
+  const filteredZoneOptions = (() => {
+    const needle = zoneSearchTerm.trim().toLowerCase();
+    if (!needle) return zoneOptions;
+    return zoneOptions.filter((zone) => zone.zoneName.toLowerCase().includes(needle));
+  })();
+
   const renderSmartOltZones = async (fitBounds = true) => {
     if (!mapInstanceRef.current || !window.google?.maps) return;
 
@@ -570,33 +638,41 @@ export default function App() {
 
       zones.forEach((zone, idx) => {
         const color = palette[idx % palette.length];
-        const hull = getConvexHull(zone.points);
-        const centroid = computeCentroid(hull.length > 0 ? hull : zone.points);
+        const areaSeedPoints = filterZoneOutliers(zone.points);
+        const hull = getConvexHull(areaSeedPoints);
+        const smoothHull = hull.length >= 3 ? smoothClosedPath(hull, 2) : hull;
+        const centroid = computeCentroid(smoothHull.length > 0 ? smoothHull : areaSeedPoints);
 
-        if (hull.length >= 3) {
+        if (smoothHull.length >= 3) {
           const polygon = new window.google.maps.Polygon({
-            paths: hull,
+            paths: smoothHull,
             strokeColor: color,
-            strokeOpacity: 0.42,
-            strokeWeight: 1,
+            strokeOpacity: 0.45,
+            strokeWeight: 1.25,
             fillColor: color,
-            fillOpacity: 0.07,
+            fillOpacity: 0.08,
             geodesic: true,
             clickable: false,
             map: mapInstanceRef.current,
           });
           zoneOverlaysRef.current.push(polygon);
-          hull.forEach((p) => bounds.extend(p));
+          smoothHull.forEach((point) => bounds.extend(point));
         } else {
-          const radius = hull.length === 1 ? 120 : 180;
+          const maxDistance = areaSeedPoints.reduce((acc, point) => {
+            return Math.max(acc, approxDistanceMeters(point, centroid));
+          }, 0);
+          const radius = areaSeedPoints.length === 1
+            ? 150
+            : clampNumber(maxDistance * 1.2, 170, 550);
+
           const circle = new window.google.maps.Circle({
             center: centroid,
             radius,
             strokeColor: color,
-            strokeOpacity: 0.42,
-            strokeWeight: 1,
+            strokeOpacity: 0.45,
+            strokeWeight: 1.25,
             fillColor: color,
-            fillOpacity: 0.07,
+            fillOpacity: 0.08,
             clickable: false,
             map: mapInstanceRef.current,
           });
@@ -1507,6 +1583,60 @@ export default function App() {
 
             <CardContent className="p-6 sm:p-8 space-y-6">
               <div className="space-y-2.5">
+                <div className="mb-4 rounded-2xl border border-accent/20 bg-gradient-to-r from-accent/5 to-primary/5 p-4 shadow-sm">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <Label htmlFor="zoneSelector" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                      <MapPin className="h-4 w-4 text-accent" /> Selecciona tu zona de referencia
+                    </Label>
+                    <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-gray-600 border border-gray-200">
+                      {zoneOptions.length} zonas
+                    </span>
+                  </div>
+
+                  <div className="relative">
+                    <Input
+                      id="zoneSelector"
+                      value={zoneSearchTerm}
+                      disabled={zonesStatus === 'loading' || zoneOptions.length === 0}
+                      placeholder="Busca tu zona y selecciónala"
+                      onChange={(e) => {
+                        const next = e.target.value;
+                        setZoneSearchTerm(next);
+                        setShowZoneSuggestions(true);
+                        if (!next.trim()) setSelectedZoneKey('');
+                      }}
+                      onFocus={() => setShowZoneSuggestions(true)}
+                      onBlur={() => { setTimeout(() => setShowZoneSuggestions(false), 180); }}
+                      className="h-12 w-full rounded-xl border-2 border-white bg-white px-3 pr-10 text-sm text-gray-700 shadow-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:bg-gray-100"
+                    />
+                    <ChevronDown className={`pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500 transition-transform ${showZoneSuggestions ? 'rotate-180' : ''}`} />
+
+                    {showZoneSuggestions && (
+                      <ul className="absolute z-50 left-0 right-0 top-full mt-1 max-h-64 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg">
+                        {zonesStatus === 'loading' && (
+                          <li className="px-4 py-2.5 text-sm text-gray-500">Cargando zonas…</li>
+                        )}
+
+                        {zonesStatus !== 'loading' && filteredZoneOptions.length === 0 && (
+                          <li className="px-4 py-2.5 text-sm text-gray-500">No se encontraron zonas para tu búsqueda.</li>
+                        )}
+
+                        {zonesStatus !== 'loading' && filteredZoneOptions.slice(0, 80).map((zone) => (
+                          <li
+                            key={zone.key}
+                            onMouseDown={() => handleZoneSelection(zone)}
+                            className={`cursor-pointer px-4 py-2.5 text-sm border-b last:border-0 border-gray-100 ${selectedZoneKey === zone.key ? 'bg-accent/10 text-primary font-semibold' : 'text-gray-700 hover:bg-accent/5'}`}
+                          >
+                            {zone.zoneName}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+
+                  <p className="mt-2 text-xs text-gray-600">Si no te ubicas por dirección, usa este selector y luego confirma tu punto exacto en el mapa.</p>
+                </div>
+
                 <Label htmlFor="address" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                   <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Dirección completa <span className="text-accent">*</span>
                 </Label>
@@ -1571,48 +1701,10 @@ export default function App() {
                     </div>
                   </div>
                     <div className="mt-3">
-                      <div className="mb-3 rounded-2xl border border-gray-200 bg-white/70 p-3 sm:p-4 shadow-sm">
-                        <div className="mb-2 flex items-center justify-between gap-3">
-                          <Label htmlFor="zoneSelector" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                            <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> ¿No ubicas tu dirección? Elige una zona de referencia
-                          </Label>
-                          <span className="shrink-0 rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-semibold text-gray-600">
-                            {zoneOptions.length} zonas
-                          </span>
-                        </div>
-
-                        <div className="relative">
-                          <select
-                            id="zoneSelector"
-                            value={selectedZoneKey}
-                            onChange={(e) => {
-                              const zoneKey = e.target.value;
-                              setSelectedZoneKey(zoneKey);
-                              if (zoneKey) {
-                                const zone = zoneOptions.find((z) => z.key === zoneKey);
-                                if (zone) {
-                                  setValue('neighborhood', zone.zoneName, { shouldValidate: true, shouldDirty: true });
-                                }
-                                void focusMapOnZone(zoneKey);
-                              }
-                            }}
-                            disabled={zonesStatus === 'loading' || zoneOptions.length === 0}
-                            className="h-12 w-full appearance-none rounded-xl border-2 border-gray-200 bg-white px-3 pr-10 text-sm text-gray-700 focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:bg-gray-100"
-                          >
-                            <option value="">Selecciona una zona para centrar el mapa</option>
-                            {zoneOptions.map((zone) => (
-                              <option key={zone.key} value={zone.key}>{zone.zoneName}</option>
-                            ))}
-                          </select>
-                          <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
-                        </div>
-
-                        <p className="mt-2 text-xs text-gray-500">Puedes usar la zona para orientarte, pero no olvides escribir tu dirección completa en el campo de arriba.</p>
-                      </div>
-
                       <div className="relative">
                         <div ref={(el) => { mapContainerRef.current = el; }} className="h-56 sm:h-72 md:h-96 rounded-xl border-2 border-gray-200 overflow-hidden" />
                       </div>
+                      <p className="mt-2 text-xs text-gray-600">Si al escribir la dirección no te lleva automáticamente, selecciona tu punto exacto tocando/clickeando en el mapa.</p>
                       <p className="mt-2 text-xs text-gray-500">
                         {zonesStatus === 'loading' && 'Cargando zonas de cobertura…'}
                         {zonesStatus === 'success' && `Zonas visibles desde SmartOLT: ${zonesCount}`}
