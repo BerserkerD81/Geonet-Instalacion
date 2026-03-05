@@ -152,6 +152,33 @@ const getConvexHull = (points: Array<{ lat: number; lng: number }>) => {
   return [...lower, ...upper];
 };
 
+const sanitizeZoneName = (value: unknown, zoneId: string) => {
+  const raw = String(value ?? '').trim();
+  if (!raw) return `Zona ${zoneId}`;
+
+  const cleaned = raw
+    .replace(/\s*[-–—]?\s*Z\s*\d+\b/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^\s*[-–—,:;|/]+\s*/g, '')
+    .replace(/\s*[-–—,:;|/]+\s*$/g, '')
+    .trim();
+
+  return cleaned || `Zona ${zoneId}`;
+};
+
+const formatLocalDateKey = (date: Date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const addDaysKeepingLocal = (date: Date, days: number) => {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+};
+
 export default function App() {
   const { register, handleSubmit, formState: { errors }, setValue, watch, control, clearErrors, trigger } = useForm<FormData>();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -320,6 +347,8 @@ export default function App() {
 
   const [zonesStatus, setZonesStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [zonesCount, setZonesCount] = useState(0);
+  const [zoneOptions, setZoneOptions] = useState<OdbZone[]>([]);
+  const [selectedZoneKey, setSelectedZoneKey] = useState('');
 
   const getEffectiveGoogleKey = () => {
     const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
@@ -343,9 +372,10 @@ export default function App() {
   };
 
   const fetchSmartOltZones = async () => {
-    if (smartOltZonesRef.current) return smartOltZonesRef.current;
-
-    console.log('[SmartOLT] Iniciando solicitud de ODBs a /api/smartolt/odbs');
+    if (smartOltZonesRef.current) {
+      setZoneOptions(smartOltZonesRef.current);
+      return smartOltZonesRef.current;
+    }
 
     const res = await fetch('/api/smartolt/odbs', {
       method: 'GET',
@@ -354,21 +384,16 @@ export default function App() {
       },
     });
 
-    console.log('[SmartOLT] Respuesta HTTP', res.status, res.statusText);
-
     if (!res.ok) {
       throw new Error(`SmartOLT respondió ${res.status} ${res.statusText}`);
     }
 
     const body = await res.json();
-    console.log('[SmartOLT] Payload recibido', body);
     const odbRows: SmartOltOdb[] = Array.isArray(body)
       ? body
       : Array.isArray(body?.response)
         ? body.response
         : [];
-
-    console.log('[SmartOLT] Filas ODB detectadas', odbRows.length);
 
     const byZone = new Map<string, OdbZone>();
 
@@ -378,7 +403,7 @@ export default function App() {
       if (lat === null || lng === null) continue;
 
       const zoneId = String(row.zone_id ?? 'sin-id');
-      const zoneName = String(row.zone_name ?? `Zona ${zoneId}`).trim() || `Zona ${zoneId}`;
+      const zoneName = sanitizeZoneName(row.zone_name, zoneId);
       const key = `${zoneId}__${zoneName}`;
 
       if (!byZone.has(key)) {
@@ -393,9 +418,36 @@ export default function App() {
       byZone.get(key)!.points.push({ lat, lng });
     }
 
-    smartOltZonesRef.current = Array.from(byZone.values()).filter((zone) => zone.points.length > 0);
-    console.log('[SmartOLT] Zonas agrupadas', smartOltZonesRef.current.length, smartOltZonesRef.current);
+    smartOltZonesRef.current = Array.from(byZone.values())
+      .filter((zone) => zone.points.length > 0)
+      .sort((a, b) => a.zoneName.localeCompare(b.zoneName, 'es', { sensitivity: 'base' }));
+    setZoneOptions(smartOltZonesRef.current);
     return smartOltZonesRef.current;
+  };
+
+  const focusMapOnZone = async (zoneKey: string) => {
+    if (!zoneKey) return;
+
+    try {
+      await ensureMapsLoaded();
+      if (!mapInstanceRef.current && mapContainerRef.current) await initMiniMap();
+
+      const zones = smartOltZonesRef.current || await fetchSmartOltZones();
+      const zone = zones.find((z) => z.key === zoneKey);
+      if (!zone || zone.points.length === 0 || !mapInstanceRef.current || !window.google?.maps) return;
+
+      if (zone.points.length === 1) {
+        mapInstanceRef.current.panTo(zone.points[0]);
+        mapInstanceRef.current.setZoom(16);
+        return;
+      }
+
+      const bounds = new window.google.maps.LatLngBounds();
+      zone.points.forEach((p) => bounds.extend(p));
+      if (!bounds.isEmpty()) mapInstanceRef.current.fitBounds(bounds, 60);
+    } catch (e) {
+      console.error('No se pudo enfocar la zona seleccionada', e);
+    }
   };
 
   const renderSmartOltZones = async (fitBounds = true) => {
@@ -829,20 +881,19 @@ export default function App() {
 
   const getValidDates = () => {
     const dates: {date: Date, formatted: string}[] = [];
-    const today = new Date();
-    const twoWeeksLater = new Date();
-    twoWeeksLater.setDate(today.getDate() + 14);
+    const now = new Date();
+    const baseDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0, 0);
+    const twoWeeksLater = addDaysKeepingLocal(baseDate, 14);
 
-    let currentDate = new Date(today);
-    currentDate.setDate(currentDate.getDate() + 1); 
+    let currentDate = addDaysKeepingLocal(baseDate, 1);
 
     while (currentDate <= twoWeeksLater) {
       const dayOfWeek = currentDate.getDay();
       if (dayOfWeek >= 1 && dayOfWeek <= 5) {
-        const formatted = currentDate.toISOString().split('T')[0];
+        const formatted = formatLocalDateKey(currentDate);
         dates.push({ date: new Date(currentDate), formatted });
       }
-      currentDate.setDate(currentDate.getDate() + 1);
+      currentDate = addDaysKeepingLocal(currentDate, 1);
     }
     return dates;
   };
@@ -1405,15 +1456,44 @@ export default function App() {
                     </div>
                   </div>
                     <div className="mt-3">
-                                  <div className="relative">
-                                    <div ref={(el) => { mapContainerRef.current = el; }} className="h-56 sm:h-72 md:h-96 rounded-xl border-2 border-gray-200 overflow-hidden" />
-                                  </div>
-                                  <p className="mt-2 text-xs text-gray-500">
-                                    {zonesStatus === 'loading' && 'Cargando zonas de cobertura…'}
-                                    {zonesStatus === 'success' && `Zonas visibles desde SmartOLT: ${zonesCount}`}
-                                    {zonesStatus === 'error' && 'No se pudieron cargar las zonas de cobertura'}
-                                    {zonesStatus === 'idle' && 'Cargando zonas SmartOLT…'}
-                                  </p>
+                      <div className="space-y-2.5 mb-3">
+                        <Label htmlFor="zoneSelector" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                          <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> ¿No ubicas tu dirección? Elige una zona de referencia
+                        </Label>
+                        <select
+                          id="zoneSelector"
+                          value={selectedZoneKey}
+                          onChange={(e) => {
+                            const zoneKey = e.target.value;
+                            setSelectedZoneKey(zoneKey);
+                            if (zoneKey) {
+                              const zone = zoneOptions.find((z) => z.key === zoneKey);
+                              if (zone) {
+                                setValue('neighborhood', zone.zoneName, { shouldValidate: true, shouldDirty: true });
+                              }
+                              void focusMapOnZone(zoneKey);
+                            }
+                          }}
+                          disabled={zonesStatus === 'loading' || zoneOptions.length === 0}
+                          className="h-12 w-full rounded-xl border-2 border-gray-200 bg-white px-3 text-sm text-gray-700 focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:bg-gray-100"
+                        >
+                          <option value="">Selecciona una zona para centrar el mapa</option>
+                          {zoneOptions.map((zone) => (
+                            <option key={zone.key} value={zone.key}>{zone.zoneName}</option>
+                          ))}
+                        </select>
+                        <p className="text-xs text-gray-500">Si eliges una zona para orientarte, no olvides escribir tu dirección completa en el campo de arriba.</p>
+                      </div>
+
+                      <div className="relative">
+                        <div ref={(el) => { mapContainerRef.current = el; }} className="h-56 sm:h-72 md:h-96 rounded-xl border-2 border-gray-200 overflow-hidden" />
+                      </div>
+                      <p className="mt-2 text-xs text-gray-500">
+                        {zonesStatus === 'loading' && 'Cargando zonas de cobertura…'}
+                        {zonesStatus === 'success' && `Zonas visibles desde SmartOLT: ${zonesCount}`}
+                        {zonesStatus === 'error' && 'No se pudieron cargar las zonas de cobertura'}
+                        {zonesStatus === 'idle' && 'Cargando zonas SmartOLT…'}
+                      </p>
                   </div>
                 </div>
                 {errors.address && <p className="text-sm text-destructive">{errors.address.message}</p>}
@@ -1694,7 +1774,7 @@ export default function App() {
                 <Label htmlFor="comments" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                   <div className="w-1.5 h-1.5 bg-gray-300 rounded-full"></div> Comentarios o solicitudes especiales
                 </Label>
-                <Textarea id="comments" rows={5} {...register('comments')} className="border-2 border-gray-200 focus:border-accent rounded-xl" />
+                <Textarea id="comments" rows={5} placeholder="Ej. Referencia de la casa, horario preferente, indicaciones para el instalador, etc." {...register('comments')} className="border-2 border-gray-200 focus:border-accent rounded-xl" />
               </div>
             </CardContent>
           </Card>
