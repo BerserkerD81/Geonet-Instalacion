@@ -6,7 +6,7 @@ import { Input } from './components/ui/input';
 import { Label } from './components/ui/label';
 import { Textarea } from './components/ui/textarea';
 import { Card, CardContent } from './components/ui/card';
-import { MapPin, Upload, User, Phone, FileText, Image as Mail, Calendar, Wifi, Loader2 } from 'lucide-react';
+import { MapPin, Upload, User, Phone, FileText, Image as Mail, Calendar, Wifi, Loader2, ChevronDown } from 'lucide-react';
 import { toast } from 'sonner';
 import { motion } from 'motion/react';
 import { TimeSelect } from './components/ui/time-select';
@@ -101,6 +101,8 @@ interface OdbZone {
   key: string;
   zoneId: string;
   zoneName: string;
+  rawZoneName: string;
+  zoneSequence: number | null;
   points: Array<{ lat: number; lng: number }>;
 }
 
@@ -154,16 +156,91 @@ const getConvexHull = (points: Array<{ lat: number; lng: number }>) => {
 
 const sanitizeZoneName = (value: unknown, zoneId: string) => {
   const raw = String(value ?? '').trim();
-  if (!raw) return `Zona ${zoneId}`;
+  if (!raw) return `Sector ${zoneId}`;
 
   const cleaned = raw
+    .replace(/\b(?:zona|vlan|odf)\s*[-–—_:#]*\s*\d+\b/gi, '')
     .replace(/\s*[-–—]?\s*Z\s*\d+\b/gi, '')
+    .replace(/\b(?:zona|vlan|odf)\b/gi, '')
     .replace(/\s{2,}/g, ' ')
     .replace(/^\s*[-–—,:;|/]+\s*/g, '')
     .replace(/\s*[-–—,:;|/]+\s*$/g, '')
     .trim();
 
-  return cleaned || `Zona ${zoneId}`;
+  return cleaned || `Sector ${zoneId}`;
+};
+
+const normalizeNameKey = (value: string) =>
+  value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
+
+const splitBaseAndTrailingNumber = (value: string) => {
+  const raw = String(value || '').trim();
+  const match = raw.match(/^(.*?)(?:\s+(\d+))?$/);
+  const baseName = (match?.[1] || raw).trim();
+  const trailing = match?.[2] ? parseInt(match[2], 10) : null;
+  return {
+    baseName: baseName || raw,
+    trailingNumber: Number.isFinite(trailing as number) ? trailing : null,
+  };
+};
+
+const extractZoneSequence = (value: unknown) => {
+  const raw = String(value ?? '');
+  const m = raw.match(/\bZ\s*0*(\d+)\b/i);
+  if (!m) return null;
+  const parsed = parseInt(m[1], 10);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const assignDisplayNamesBySequence = (zones: OdbZone[]) => {
+  const grouped = new Map<string, OdbZone[]>();
+
+  for (const zone of zones) {
+    const { baseName } = splitBaseAndTrailingNumber(zone.zoneName);
+    const key = normalizeNameKey(baseName);
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key)!.push(zone);
+  }
+
+  for (const group of grouped.values()) {
+    if (group.length <= 1) continue;
+
+    const items = group
+      .map((zone) => {
+        const { baseName, trailingNumber } = splitBaseAndTrailingNumber(zone.zoneName);
+        return {
+          zone,
+          baseName,
+          trailingNumber,
+          sequence: zone.zoneSequence ?? Number.MAX_SAFE_INTEGER,
+        };
+      })
+      .sort((a, b) => a.sequence - b.sequence || a.zone.zoneId.localeCompare(b.zone.zoneId, 'es'));
+
+    const sharedBase = items[0].baseName || 'Sector';
+    const used = new Set<number>();
+
+    let nextNumber = 1;
+    const pickNextNumber = () => {
+      while (used.has(nextNumber)) nextNumber += 1;
+      return nextNumber;
+    };
+
+    for (const item of items) {
+      let finalNumber = item.trailingNumber;
+      if (!finalNumber || finalNumber <= 0 || used.has(finalNumber)) {
+        finalNumber = pickNextNumber();
+      }
+      used.add(finalNumber);
+      item.zone.zoneName = `${sharedBase} ${finalNumber}`.trim();
+    }
+  }
+
+  return zones;
 };
 
 const formatLocalDateKey = (date: Date) => {
@@ -342,6 +419,8 @@ export default function App() {
   const markerRef = useRef<any>(null);
   const suggestDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const zoneOverlaysRef = useRef<any[]>([]);
+  const zoneLabelMarkersRef = useRef<any[]>([]);
+  const zoneZoomListenerRef = useRef<any>(null);
   const smartOltZonesRef = useRef<OdbZone[] | null>(null);
   const zonesRenderedRef = useRef(false);
 
@@ -368,6 +447,13 @@ export default function App() {
         if (typeof overlay?.setMap === 'function') overlay.setMap(null);
       } catch (e) {}
     }
+
+    if (zoneZoomListenerRef.current && window.google?.maps?.event?.removeListener) {
+      try { window.google.maps.event.removeListener(zoneZoomListenerRef.current); } catch (e) {}
+      zoneZoomListenerRef.current = null;
+    }
+
+    zoneLabelMarkersRef.current = [];
     zoneOverlaysRef.current = [];
   };
 
@@ -403,7 +489,9 @@ export default function App() {
       if (lat === null || lng === null) continue;
 
       const zoneId = String(row.zone_id ?? 'sin-id');
-      const zoneName = sanitizeZoneName(row.zone_name, zoneId);
+      const rawZoneName = String(row.zone_name ?? '');
+      const zoneName = sanitizeZoneName(rawZoneName, zoneId);
+      const zoneSequence = extractZoneSequence(rawZoneName);
       const key = `${zoneId}__${zoneName}`;
 
       if (!byZone.has(key)) {
@@ -411,6 +499,8 @@ export default function App() {
           key,
           zoneId,
           zoneName,
+          rawZoneName,
+          zoneSequence,
           points: [],
         });
       }
@@ -418,9 +508,16 @@ export default function App() {
       byZone.get(key)!.points.push({ lat, lng });
     }
 
-    smartOltZonesRef.current = Array.from(byZone.values())
+    smartOltZonesRef.current = assignDisplayNamesBySequence(
+      Array.from(byZone.values())
       .filter((zone) => zone.points.length > 0)
-      .sort((a, b) => a.zoneName.localeCompare(b.zoneName, 'es', { sensitivity: 'base' }));
+      .sort((a, b) => {
+        const seqA = a.zoneSequence ?? Number.MAX_SAFE_INTEGER;
+        const seqB = b.zoneSequence ?? Number.MAX_SAFE_INTEGER;
+        if (seqA !== seqB) return seqA - seqB;
+        return a.zoneName.localeCompare(b.zoneName, 'es', { sensitivity: 'base' });
+      })
+    );
     setZoneOptions(smartOltZonesRef.current);
     return smartOltZonesRef.current;
   };
@@ -467,8 +564,9 @@ export default function App() {
         return;
       }
 
-      const palette = ['#1D4ED8', '#EA580C', '#0F766E', '#7C3AED', '#BE123C'];
+      const palette = ['#2563EB', '#F97316', '#0D9488', '#7C3AED', '#DB2777'];
       const bounds = new window.google.maps.LatLngBounds();
+      zoneLabelMarkersRef.current = [];
 
       zones.forEach((zone, idx) => {
         const color = palette[idx % palette.length];
@@ -479,10 +577,11 @@ export default function App() {
           const polygon = new window.google.maps.Polygon({
             paths: hull,
             strokeColor: color,
-            strokeOpacity: 0.9,
-            strokeWeight: 2,
+            strokeOpacity: 0.42,
+            strokeWeight: 1,
             fillColor: color,
-            fillOpacity: 0.16,
+            fillOpacity: 0.07,
+            geodesic: true,
             clickable: false,
             map: mapInstanceRef.current,
           });
@@ -494,10 +593,10 @@ export default function App() {
             center: centroid,
             radius,
             strokeColor: color,
-            strokeOpacity: 0.9,
-            strokeWeight: 2,
+            strokeOpacity: 0.42,
+            strokeWeight: 1,
             fillColor: color,
-            fillOpacity: 0.12,
+            fillOpacity: 0.07,
             clickable: false,
             map: mapInstanceRef.current,
           });
@@ -518,10 +617,26 @@ export default function App() {
             fontSize: '11px',
             fontWeight: '700',
           },
+          visible: false,
           zIndex: 999,
         });
+        zoneLabelMarkersRef.current.push(label);
         zoneOverlaysRef.current.push(label);
       });
+
+      const updateZoneLabelsVisibility = () => {
+        const currentZoom = mapInstanceRef.current?.getZoom?.() ?? 0;
+        const visible = currentZoom >= 16;
+        for (const marker of zoneLabelMarkersRef.current) {
+          try { marker.setVisible(visible); } catch (e) {}
+        }
+      };
+
+      if (zoneZoomListenerRef.current && window.google?.maps?.event?.removeListener) {
+        try { window.google.maps.event.removeListener(zoneZoomListenerRef.current); } catch (e) {}
+      }
+      zoneZoomListenerRef.current = mapInstanceRef.current.addListener('zoom_changed', updateZoneLabelsVisibility);
+      updateZoneLabelsVisibility();
 
       if (fitBounds && !bounds.isEmpty()) {
         mapInstanceRef.current.fitBounds(bounds, 40);
@@ -1456,33 +1571,43 @@ export default function App() {
                     </div>
                   </div>
                     <div className="mt-3">
-                      <div className="space-y-2.5 mb-3">
-                        <Label htmlFor="zoneSelector" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                          <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> ¿No ubicas tu dirección? Elige una zona de referencia
-                        </Label>
-                        <select
-                          id="zoneSelector"
-                          value={selectedZoneKey}
-                          onChange={(e) => {
-                            const zoneKey = e.target.value;
-                            setSelectedZoneKey(zoneKey);
-                            if (zoneKey) {
-                              const zone = zoneOptions.find((z) => z.key === zoneKey);
-                              if (zone) {
-                                setValue('neighborhood', zone.zoneName, { shouldValidate: true, shouldDirty: true });
+                      <div className="mb-3 rounded-2xl border border-gray-200 bg-white/70 p-3 sm:p-4 shadow-sm">
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                          <Label htmlFor="zoneSelector" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
+                            <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> ¿No ubicas tu dirección? Elige una zona de referencia
+                          </Label>
+                          <span className="shrink-0 rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-semibold text-gray-600">
+                            {zoneOptions.length} zonas
+                          </span>
+                        </div>
+
+                        <div className="relative">
+                          <select
+                            id="zoneSelector"
+                            value={selectedZoneKey}
+                            onChange={(e) => {
+                              const zoneKey = e.target.value;
+                              setSelectedZoneKey(zoneKey);
+                              if (zoneKey) {
+                                const zone = zoneOptions.find((z) => z.key === zoneKey);
+                                if (zone) {
+                                  setValue('neighborhood', zone.zoneName, { shouldValidate: true, shouldDirty: true });
+                                }
+                                void focusMapOnZone(zoneKey);
                               }
-                              void focusMapOnZone(zoneKey);
-                            }
-                          }}
-                          disabled={zonesStatus === 'loading' || zoneOptions.length === 0}
-                          className="h-12 w-full rounded-xl border-2 border-gray-200 bg-white px-3 text-sm text-gray-700 focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:bg-gray-100"
-                        >
-                          <option value="">Selecciona una zona para centrar el mapa</option>
-                          {zoneOptions.map((zone) => (
-                            <option key={zone.key} value={zone.key}>{zone.zoneName}</option>
-                          ))}
-                        </select>
-                        <p className="text-xs text-gray-500">Si eliges una zona para orientarte, no olvides escribir tu dirección completa en el campo de arriba.</p>
+                            }}
+                            disabled={zonesStatus === 'loading' || zoneOptions.length === 0}
+                            className="h-12 w-full appearance-none rounded-xl border-2 border-gray-200 bg-white px-3 pr-10 text-sm text-gray-700 focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:bg-gray-100"
+                          >
+                            <option value="">Selecciona una zona para centrar el mapa</option>
+                            {zoneOptions.map((zone) => (
+                              <option key={zone.key} value={zone.key}>{zone.zoneName}</option>
+                            ))}
+                          </select>
+                          <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500" />
+                        </div>
+
+                        <p className="mt-2 text-xs text-gray-500">Puedes usar la zona para orientarte, pero no olvides escribir tu dirección completa en el campo de arriba.</p>
                       </div>
 
                       <div className="relative">
