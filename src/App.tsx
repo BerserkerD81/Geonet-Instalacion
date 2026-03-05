@@ -87,6 +87,71 @@ interface FormData {
   timeTo: string;
 }
 
+interface SmartOltOdb {
+  id?: number | string;
+  name?: string;
+  nr_of_ports?: number | string;
+  latitude?: number | string | null;
+  longitude?: number | string | null;
+  zone_id?: number | string | null;
+  zone_name?: string | null;
+}
+
+interface OdbZone {
+  key: string;
+  zoneId: string;
+  zoneName: string;
+  points: Array<{ lat: number; lng: number }>;
+}
+
+const toFiniteNumber = (value: unknown) => {
+  const n = typeof value === 'number' ? value : parseFloat(String(value ?? ''));
+  return Number.isFinite(n) ? n : null;
+};
+
+const computeCentroid = (points: Array<{ lat: number; lng: number }>) => {
+  const total = points.reduce(
+    (acc, p) => ({ lat: acc.lat + p.lat, lng: acc.lng + p.lng }),
+    { lat: 0, lng: 0 },
+  );
+  return {
+    lat: total.lat / points.length,
+    lng: total.lng / points.length,
+  };
+};
+
+const getConvexHull = (points: Array<{ lat: number; lng: number }>) => {
+  if (points.length <= 3) return [...points];
+
+  const sorted = [...points].sort((a, b) => (a.lng === b.lng ? a.lat - b.lat : a.lng - b.lng));
+  const cross = (
+    o: { lat: number; lng: number },
+    a: { lat: number; lng: number },
+    b: { lat: number; lng: number },
+  ) => (a.lng - o.lng) * (b.lat - o.lat) - (a.lat - o.lat) * (b.lng - o.lng);
+
+  const lower: Array<{ lat: number; lng: number }> = [];
+  for (const p of sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) {
+      lower.pop();
+    }
+    lower.push(p);
+  }
+
+  const upper: Array<{ lat: number; lng: number }> = [];
+  for (let i = sorted.length - 1; i >= 0; i -= 1) {
+    const p = sorted[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) {
+      upper.pop();
+    }
+    upper.push(p);
+  }
+
+  lower.pop();
+  upper.pop();
+  return [...lower, ...upper];
+};
+
 export default function App() {
   const { register, handleSubmit, formState: { errors }, setValue, watch, control, clearErrors, trigger } = useForm<FormData>();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -249,6 +314,12 @@ export default function App() {
   const mapInstanceRef = useRef<any>(null);
   const markerRef = useRef<any>(null);
   const suggestDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const zoneOverlaysRef = useRef<any[]>([]);
+  const smartOltZonesRef = useRef<OdbZone[] | null>(null);
+  const zonesRenderedRef = useRef(false);
+
+  const [zonesStatus, setZonesStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const [zonesCount, setZonesCount] = useState(0);
 
   const getEffectiveGoogleKey = () => {
     const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
@@ -260,6 +331,157 @@ export default function App() {
     const key = getEffectiveGoogleKey();
     if (!key) return Promise.reject(new Error('Falta VITE_GOOGLE_MAPS_API_KEY'));
     return loadGoogleMapsPlaces(key);
+  };
+
+  const clearZoneOverlays = () => {
+    for (const overlay of zoneOverlaysRef.current) {
+      try {
+        if (typeof overlay?.setMap === 'function') overlay.setMap(null);
+      } catch (e) {}
+    }
+    zoneOverlaysRef.current = [];
+  };
+
+  const fetchSmartOltZones = async () => {
+    if (smartOltZonesRef.current) return smartOltZonesRef.current;
+
+    console.log('[SmartOLT] Iniciando solicitud de ODBs a /api/smartolt/odbs');
+
+    const res = await fetch('/api/smartolt/odbs', {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+
+    console.log('[SmartOLT] Respuesta HTTP', res.status, res.statusText);
+
+    if (!res.ok) {
+      throw new Error(`SmartOLT respondió ${res.status} ${res.statusText}`);
+    }
+
+    const body = await res.json();
+    console.log('[SmartOLT] Payload recibido', body);
+    const odbRows: SmartOltOdb[] = Array.isArray(body)
+      ? body
+      : Array.isArray(body?.response)
+        ? body.response
+        : [];
+
+    console.log('[SmartOLT] Filas ODB detectadas', odbRows.length);
+
+    const byZone = new Map<string, OdbZone>();
+
+    for (const row of odbRows) {
+      const lat = toFiniteNumber(row.latitude);
+      const lng = toFiniteNumber(row.longitude);
+      if (lat === null || lng === null) continue;
+
+      const zoneId = String(row.zone_id ?? 'sin-id');
+      const zoneName = String(row.zone_name ?? `Zona ${zoneId}`).trim() || `Zona ${zoneId}`;
+      const key = `${zoneId}__${zoneName}`;
+
+      if (!byZone.has(key)) {
+        byZone.set(key, {
+          key,
+          zoneId,
+          zoneName,
+          points: [],
+        });
+      }
+
+      byZone.get(key)!.points.push({ lat, lng });
+    }
+
+    smartOltZonesRef.current = Array.from(byZone.values()).filter((zone) => zone.points.length > 0);
+    console.log('[SmartOLT] Zonas agrupadas', smartOltZonesRef.current.length, smartOltZonesRef.current);
+    return smartOltZonesRef.current;
+  };
+
+  const renderSmartOltZones = async (fitBounds = true) => {
+    if (!mapInstanceRef.current || !window.google?.maps) return;
+
+    setZonesStatus('loading');
+
+    try {
+      const zones = await fetchSmartOltZones();
+      clearZoneOverlays();
+
+      setZonesCount(zones.length);
+
+      if (zones.length === 0) {
+        setZonesStatus('success');
+        zonesRenderedRef.current = true;
+        return;
+      }
+
+      const palette = ['#1D4ED8', '#EA580C', '#0F766E', '#7C3AED', '#BE123C'];
+      const bounds = new window.google.maps.LatLngBounds();
+
+      zones.forEach((zone, idx) => {
+        const color = palette[idx % palette.length];
+        const hull = getConvexHull(zone.points);
+        const centroid = computeCentroid(hull.length > 0 ? hull : zone.points);
+
+        if (hull.length >= 3) {
+          const polygon = new window.google.maps.Polygon({
+            paths: hull,
+            strokeColor: color,
+            strokeOpacity: 0.9,
+            strokeWeight: 2,
+            fillColor: color,
+            fillOpacity: 0.16,
+            clickable: false,
+            map: mapInstanceRef.current,
+          });
+          zoneOverlaysRef.current.push(polygon);
+          hull.forEach((p) => bounds.extend(p));
+        } else {
+          const radius = hull.length === 1 ? 120 : 180;
+          const circle = new window.google.maps.Circle({
+            center: centroid,
+            radius,
+            strokeColor: color,
+            strokeOpacity: 0.9,
+            strokeWeight: 2,
+            fillColor: color,
+            fillOpacity: 0.12,
+            clickable: false,
+            map: mapInstanceRef.current,
+          });
+          zoneOverlaysRef.current.push(circle);
+          bounds.extend(centroid);
+        }
+
+        const label = new window.google.maps.Marker({
+          position: centroid,
+          map: mapInstanceRef.current,
+          icon: {
+            path: window.google.maps.SymbolPath.CIRCLE,
+            scale: 0,
+          },
+          label: {
+            text: zone.zoneName,
+            color,
+            fontSize: '11px',
+            fontWeight: '700',
+          },
+          zIndex: 999,
+        });
+        zoneOverlaysRef.current.push(label);
+      });
+
+      if (fitBounds && !bounds.isEmpty()) {
+        mapInstanceRef.current.fitBounds(bounds, 40);
+      }
+
+      setZonesStatus('success');
+      zonesRenderedRef.current = true;
+    } catch (e) {
+      console.error('Error cargando zonas SmartOLT', e);
+      setZonesStatus('error');
+      toast.error('No se pudieron cargar las zonas de cobertura');
+    }
   };
 
   // --- MAPAS Y MARCADORES (Modernizado con AdvancedMarkerElement) ---
@@ -363,6 +585,19 @@ export default function App() {
   const initMiniMap = async () => {
     try {
       if (!mapContainerRef.current) return;
+
+      setZonesStatus('loading');
+
+      let preloadedZones: OdbZone[] = [];
+      try {
+        preloadedZones = await fetchSmartOltZones();
+        setZonesCount(preloadedZones.length);
+        setZonesStatus('success');
+      } catch (e) {
+        console.error('Error cargando ODBs/Zonas SmartOLT antes de inicializar el mapa', e);
+        setZonesStatus('error');
+      }
+
       try {
         await ensureMapsLoaded();
       } catch (e) {
@@ -371,9 +606,13 @@ export default function App() {
       }
 
       if (!window.google?.maps) return;
-      if (mapInstanceRef.current) return;
+      if (mapInstanceRef.current) {
+        if (!zonesRenderedRef.current) void renderSmartOltZones(true);
+        return;
+      }
 
-      const defaultCenter = { lat: -35.4269, lng: -71.6554 };
+      const allZonePoints = preloadedZones.flatMap((z) => z.points);
+      const defaultCenter = allZonePoints.length > 0 ? computeCentroid(allZonePoints) : { lat: -35.4269, lng: -71.6554 };
       
       const onMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
@@ -400,11 +639,19 @@ export default function App() {
       });
 
       const coords = (watch('coordinates') || '') as string;
+      let hasInitialCoords = false;
       if (coords) {
         const [latS, lngS] = coords.split(',').map((s: string) => s.trim());
         const lat = parseFloat(latS);
         const lng = parseFloat(lngS);
-        if (Number.isFinite(lat) && Number.isFinite(lng)) updateMapMarker(lat, lng, false);
+        if (Number.isFinite(lat) && Number.isFinite(lng)) {
+          hasInitialCoords = true;
+          updateMapMarker(lat, lng, false);
+        }
+      }
+
+      if (!zonesRenderedRef.current) {
+        await renderSmartOltZones(!hasInitialCoords);
       }
     } catch (e) {
       console.error('initMiniMap error', e);
@@ -415,6 +662,13 @@ export default function App() {
     void initMiniMap();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mapContainerRef.current]);
+
+  useEffect(() => {
+    return () => {
+      if (suggestDebounceRef.current) clearTimeout(suggestDebounceRef.current);
+      clearZoneOverlays();
+    };
+  }, []);
 
 
   // --- GEOLOCALIZACIÓN ---
@@ -1154,6 +1408,12 @@ export default function App() {
                                   <div className="relative">
                                     <div ref={(el) => { mapContainerRef.current = el; }} className="h-56 sm:h-72 md:h-96 rounded-xl border-2 border-gray-200 overflow-hidden" />
                                   </div>
+                                  <p className="mt-2 text-xs text-gray-500">
+                                    {zonesStatus === 'loading' && 'Cargando zonas de cobertura…'}
+                                    {zonesStatus === 'success' && `Zonas visibles desde SmartOLT: ${zonesCount}`}
+                                    {zonesStatus === 'error' && 'No se pudieron cargar las zonas de cobertura'}
+                                    {zonesStatus === 'idle' && 'Cargando zonas SmartOLT…'}
+                                  </p>
                   </div>
                 </div>
                 {errors.address && <p className="text-sm text-destructive">{errors.address.message}</p>}
@@ -1371,7 +1631,7 @@ export default function App() {
                 {/* ID Front */}
                 <div className="space-y-3">
                   <Label htmlFor="idFront" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                      <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Identificación (Frente)
+                      <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Cedula de Identidad/Carnet (Frente)
                     </Label>
                   <div className="relative group">
                     <input id="idFront" type="file" accept="image/jpeg,image/png" capture="environment" {...idFrontRegister} ref={(el) => { idFrontRegister.ref(el); idFrontFileInputRef.current = el; }} className="hidden" />
@@ -1386,7 +1646,7 @@ export default function App() {
                 {/* ID Back */}
                 <div className="space-y-3">
                   <Label htmlFor="idBack" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Identificación (Reverso)
+                    <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Cedula de Identidad/Carnet (Reverso)
                   </Label>
                   <div className="relative group">
                     <input id="idBack" type="file" accept="image/jpeg,image/png" capture="environment" disabled={!hasIdFront} {...idBackRegister} ref={(el) => { idBackRegister.ref(el); idBackFileInputRef.current = el; }} className="hidden" />
@@ -1448,7 +1708,7 @@ export default function App() {
                 </div>
                 <div>
                   <h3 className="text-2xl font-bold">Fecha y Horario</h3>
-                  <p className="text-sm text-white/80">Selecciona días disponibles (Lunes a Viernes)</p>
+                  <p className="text-sm text-white/80">Selecciona días disponibles (Lunes a Viernes) esto puede variar dependiendo del horario de nuestros instaladores </p>
                 </div>
               </div>
             </div>

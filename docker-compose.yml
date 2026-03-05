@@ -5,6 +5,8 @@ services:
       dockerfile: Dockerfile
     environment:
       VITE_GOOGLE_MAPS_API_KEY: ${VITE_GOOGLE_MAPS_API_KEY}
+      SMARTOLT_GET_ODBS_URL: ${SMARTOLT_GET_ODBS_URL:-https://geonet-cl.smartolt.com/api/system/get_odbs}
+      SMARTOLT_X_TOKEN: ${SMARTOLT_X_TOKEN}
     ports:
       - "8080:80"
     restart: unless-stopped
