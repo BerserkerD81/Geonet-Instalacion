@@ -181,29 +181,113 @@ const filterZoneOutliers = (points: Array<{ lat: number; lng: number }>) => {
   return filtered.length >= 3 ? filtered : points;
 };
 
-const smoothClosedPath = (points: Array<{ lat: number; lng: number }>, iterations = 2) => {
-  if (points.length < 3) return points;
+const dedupeZonePoints = (points: Array<{ lat: number; lng: number }>) => {
+  const seen = new Set<string>();
+  const result: Array<{ lat: number; lng: number }> = [];
+  for (const point of points) {
+    const key = `${point.lat.toFixed(6)}:${point.lng.toFixed(6)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(point);
+  }
+  return result;
+};
 
-  let current = [...points];
-  for (let i = 0; i < iterations; i += 1) {
-    const smoothed: Array<{ lat: number; lng: number }> = [];
-    for (let idx = 0; idx < current.length; idx += 1) {
-      const curr = current[idx];
-      const next = current[(idx + 1) % current.length];
+const getNearestNeighborDistances = (points: Array<{ lat: number; lng: number }>) => {
+  if (points.length <= 1) return [] as number[];
 
-      smoothed.push({
-        lat: curr.lat * 0.75 + next.lat * 0.25,
-        lng: curr.lng * 0.75 + next.lng * 0.25,
-      });
-      smoothed.push({
-        lat: curr.lat * 0.25 + next.lat * 0.75,
-        lng: curr.lng * 0.25 + next.lng * 0.75,
-      });
+  return points.map((current, idx) => {
+    let minDistance = Number.POSITIVE_INFINITY;
+    for (let j = 0; j < points.length; j += 1) {
+      if (j === idx) continue;
+      const d = approxDistanceMeters(current, points[j]);
+      if (d < minDistance) minDistance = d;
     }
-    current = smoothed;
+    return Number.isFinite(minDistance) ? minDistance : 0;
+  });
+};
+
+const getMedian = (values: number[]) => {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  if (sorted.length % 2 === 0) return (sorted[middle - 1] + sorted[middle]) / 2;
+  return sorted[middle];
+};
+
+const getCtoBubbleRadius = (points: Array<{ lat: number; lng: number }>) => {
+  if (points.length <= 1) return 130;
+  const nearestDistances = getNearestNeighborDistances(points);
+  const medianDistance = getMedian(nearestDistances);
+  return clampNumber(medianDistance * 0.55, 70, 170);
+};
+
+const shiftPointByMeters = (origin: { lat: number; lng: number }, eastMeters: number, northMeters: number) => {
+  const latShift = northMeters / 111_320;
+  const cosLat = Math.cos(origin.lat * (Math.PI / 180));
+  const safeCos = Math.abs(cosLat) < 0.00001 ? 0.00001 : cosLat;
+  const lngShift = eastMeters / (111_320 * safeCos);
+  return {
+    lat: origin.lat + latShift,
+    lng: origin.lng + lngShift,
+  };
+};
+
+const splitIntoSpatialClusters = (
+  points: Array<{ lat: number; lng: number }>,
+  linkDistanceMeters: number,
+) => {
+  if (points.length <= 1) return [points];
+
+  const visited = new Array(points.length).fill(false);
+  const clusters: Array<Array<{ lat: number; lng: number }>> = [];
+
+  for (let i = 0; i < points.length; i += 1) {
+    if (visited[i]) continue;
+
+    const queue = [i];
+    visited[i] = true;
+    const cluster: Array<{ lat: number; lng: number }> = [];
+
+    while (queue.length > 0) {
+      const currentIndex = queue.pop() as number;
+      const currentPoint = points[currentIndex];
+      cluster.push(currentPoint);
+
+      for (let j = 0; j < points.length; j += 1) {
+        if (visited[j]) continue;
+        const distance = approxDistanceMeters(currentPoint, points[j]);
+        if (distance <= linkDistanceMeters) {
+          visited[j] = true;
+          queue.push(j);
+        }
+      }
+    }
+
+    clusters.push(cluster);
   }
 
-  return current;
+  return clusters;
+};
+
+const buildCoverageEnvelope = (
+  points: Array<{ lat: number; lng: number }>,
+  radiusMeters: number,
+  steps = 14,
+) => {
+  const cloud: Array<{ lat: number; lng: number }> = [];
+
+  for (const point of points) {
+    cloud.push(point);
+    for (let i = 0; i < steps; i += 1) {
+      const angle = (2 * Math.PI * i) / steps;
+      const east = Math.cos(angle) * radiusMeters;
+      const north = Math.sin(angle) * radiusMeters;
+      cloud.push(shiftPointByMeters(point, east, north));
+    }
+  }
+
+  return getConvexHull(cloud);
 };
 
 const sanitizeZoneName = (value: unknown, zoneId: string) => {
@@ -214,6 +298,7 @@ const sanitizeZoneName = (value: unknown, zoneId: string) => {
     .replace(/\b(?:zona|vlan|odf)\s*[-–—_:#]*\s*\d+\b/gi, '')
     .replace(/\s*[-–—]?\s*Z\s*\d+\b/gi, '')
     .replace(/\b(?:zona|vlan|odf)\b/gi, '')
+    .replace(/\s*[-–—]?\s*torres?\s*[a-z0-9]+(?:\s*[-–—/]\s*[a-z0-9]+)*\s*$/gi, '')
     .replace(/\s{2,}/g, ' ')
     .replace(/^\s*[-–—,:;|/]+\s*/g, '')
     .replace(/\s*[-–—,:;|/]+\s*$/g, '')
@@ -293,6 +378,165 @@ const assignDisplayNamesBySequence = (zones: OdbZone[]) => {
   }
 
   return zones;
+};
+
+const ZONE_NAME_STOPWORDS = new Set([
+  'de', 'del', 'la', 'las', 'el', 'los', 'y', 'en', 'sector', 'zona', 'torre', 'torres', 'cto', 'ctos',
+]);
+
+const getZoneNameTokens = (value: string) => {
+  const normalized = normalizeNameKey(value)
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!normalized) return [] as string[];
+
+  return normalized
+    .split(' ')
+    .filter((token) => token.length > 1 && !ZONE_NAME_STOPWORDS.has(token));
+};
+
+const areZoneNamesVerySimilar = (a: string, b: string) => {
+  const normalizedA = normalizeNameKey(a)
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const normalizedB = normalizeNameKey(b)
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!normalizedA || !normalizedB) return false;
+  if (normalizedA === normalizedB) return true;
+
+  const [shorter, longer] = normalizedA.length <= normalizedB.length
+    ? [normalizedA, normalizedB]
+    : [normalizedB, normalizedA];
+
+  if (shorter.length >= 8 && longer.includes(shorter)) return true;
+
+  const tokensA = getZoneNameTokens(normalizedA);
+  const tokensB = getZoneNameTokens(normalizedB);
+  if (tokensA.length === 0 || tokensB.length === 0) return false;
+
+  const tokensBSet = new Set(tokensB);
+  let shared = 0;
+  for (const token of tokensA) {
+    if (tokensBSet.has(token)) shared += 1;
+  }
+
+  const overlap = shared / Math.max(tokensA.length, tokensB.length);
+  return shared >= 2 && overlap >= 0.66;
+};
+
+const toTitleToken = (value: string) => {
+  if (!value) return value;
+  if (value.length <= 2) return value.toUpperCase();
+  return value.charAt(0).toUpperCase() + value.slice(1);
+};
+
+const buildRepeatedCoreZoneName = (names: string[]) => {
+  if (names.length === 0) return '';
+
+  const tokenLists = names.map((name) => getZoneNameTokens(name));
+  if (tokenLists.length <= 1) {
+    return tokenLists[0]?.map(toTitleToken).join(' ') || '';
+  }
+
+  const frequency = new Map<string, number>();
+  for (const tokens of tokenLists) {
+    const uniqueTokens = new Set(tokens);
+    for (const token of uniqueTokens) {
+      frequency.set(token, (frequency.get(token) ?? 0) + 1);
+    }
+  }
+
+  const repeated = new Set(
+    Array.from(frequency.entries())
+      .filter(([, count]) => count >= 2)
+      .map(([token]) => token),
+  );
+
+  if (repeated.size === 0) return '';
+
+  const orderedCore = (tokenLists[0] || []).filter((token, idx, arr) => repeated.has(token) && arr.indexOf(token) === idx);
+  if (orderedCore.length === 0) return '';
+
+  return orderedCore.map(toTitleToken).join(' ').trim();
+};
+
+const mergeCloseAndSimilarZones = (zones: OdbZone[]) => {
+  if (zones.length <= 1) return zones;
+
+  const MERGE_DISTANCE_METERS = 240;
+  const parents = zones.map((_, idx) => idx);
+  const centroids = zones.map((zone) => computeCentroid(zone.points));
+
+  const findRoot = (idx: number): number => {
+    let current = idx;
+    while (parents[current] !== current) {
+      parents[current] = parents[parents[current]];
+      current = parents[current];
+    }
+    return current;
+  };
+
+  const union = (a: number, b: number) => {
+    const rootA = findRoot(a);
+    const rootB = findRoot(b);
+    if (rootA !== rootB) parents[rootB] = rootA;
+  };
+
+  for (let i = 0; i < zones.length; i += 1) {
+    for (let j = i + 1; j < zones.length; j += 1) {
+      if (!areZoneNamesVerySimilar(zones[i].zoneName, zones[j].zoneName)) continue;
+      if (approxDistanceMeters(centroids[i], centroids[j]) > MERGE_DISTANCE_METERS) continue;
+      union(i, j);
+    }
+  }
+
+  const groupedIndexes = new Map<number, number[]>();
+  for (let idx = 0; idx < zones.length; idx += 1) {
+    const root = findRoot(idx);
+    if (!groupedIndexes.has(root)) groupedIndexes.set(root, []);
+    groupedIndexes.get(root)!.push(idx);
+  }
+
+  let mergeIndex = 1;
+  const mergedZones: OdbZone[] = [];
+
+  for (const indexes of groupedIndexes.values()) {
+    if (indexes.length === 1) {
+      mergedZones.push(zones[indexes[0]]);
+      continue;
+    }
+
+    const members = indexes
+      .map((idx) => zones[idx])
+      .sort((a, b) => (a.zoneSequence ?? Number.MAX_SAFE_INTEGER) - (b.zoneSequence ?? Number.MAX_SAFE_INTEGER)
+        || b.points.length - a.points.length);
+
+    const primary = members[0];
+    const repeatedCoreName = buildRepeatedCoreZoneName(members.map((zone) => zone.zoneName));
+    const mergedIds = Array.from(new Set(members.map((zone) => zone.zoneId))).join('+');
+    const sequences = members
+      .map((zone) => zone.zoneSequence)
+      .filter((value): value is number => value !== null && Number.isFinite(value));
+
+    mergedZones.push({
+      key: `${primary.zoneId}__merged__${mergeIndex}`,
+      zoneId: mergedIds || primary.zoneId,
+      zoneName: repeatedCoreName || primary.zoneName,
+      rawZoneName: members.map((zone) => zone.rawZoneName).filter(Boolean).join(' | '),
+      zoneSequence: sequences.length > 0 ? Math.min(...sequences) : null,
+      points: members.flatMap((zone) => zone.points),
+    });
+
+    mergeIndex += 1;
+  }
+
+  return mergedZones;
 };
 
 const formatLocalDateKey = (date: Date) => {
@@ -477,7 +721,6 @@ export default function App() {
   const zonesRenderedRef = useRef(false);
 
   const [zonesStatus, setZonesStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  const [zonesCount, setZonesCount] = useState(0);
   const [zoneOptions, setZoneOptions] = useState<OdbZone[]>([]);
   const [selectedZoneKey, setSelectedZoneKey] = useState('');
   const [zoneSearchTerm, setZoneSearchTerm] = useState('');
@@ -562,16 +805,21 @@ export default function App() {
       byZone.get(key)!.points.push({ lat, lng });
     }
 
-    smartOltZonesRef.current = assignDisplayNamesBySequence(
-      Array.from(byZone.values())
-      .filter((zone) => zone.points.length > 0)
-      .sort((a, b) => {
+    const preparedZones = Array.from(byZone.values()).filter((zone) => zone.points.length > 0);
+    const mergedZones = mergeCloseAndSimilarZones(preparedZones);
+    const namedZones = assignDisplayNamesBySequence(
+      mergedZones.sort((a, b) => {
         const seqA = a.zoneSequence ?? Number.MAX_SAFE_INTEGER;
         const seqB = b.zoneSequence ?? Number.MAX_SAFE_INTEGER;
         if (seqA !== seqB) return seqA - seqB;
         return a.zoneName.localeCompare(b.zoneName, 'es', { sensitivity: 'base' });
       })
     );
+
+    smartOltZonesRef.current = namedZones.map((zone, idx) => ({
+      ...zone,
+      key: `${zone.zoneId}__${normalizeNameKey(zone.zoneName).replace(/\s+/g, '-') || 'zona'}__${idx}`,
+    }));
     setZoneOptions(smartOltZonesRef.current);
     return smartOltZonesRef.current;
   };
@@ -624,8 +872,6 @@ export default function App() {
       const zones = await fetchSmartOltZones();
       clearZoneOverlays();
 
-      setZonesCount(zones.length);
-
       if (zones.length === 0) {
         setZonesStatus('success');
         zonesRenderedRef.current = true;
@@ -638,46 +884,35 @@ export default function App() {
 
       zones.forEach((zone, idx) => {
         const color = palette[idx % palette.length];
-        const areaSeedPoints = filterZoneOutliers(zone.points);
-        const hull = getConvexHull(areaSeedPoints);
-        const smoothHull = hull.length >= 3 ? smoothClosedPath(hull, 2) : hull;
-        const centroid = computeCentroid(smoothHull.length > 0 ? smoothHull : areaSeedPoints);
+        const areaSeedPoints = dedupeZonePoints(filterZoneOutliers(zone.points));
+        if (areaSeedPoints.length === 0) return;
 
-        if (smoothHull.length >= 3) {
-          const polygon = new window.google.maps.Polygon({
-            paths: smoothHull,
+        const centroid = computeCentroid(areaSeedPoints);
+        const baseRadius = getCtoBubbleRadius(areaSeedPoints);
+        const clusterLinkDistance = clampNumber(baseRadius * 3.2, 220, 650);
+        const clusters = splitIntoSpatialClusters(areaSeedPoints, clusterLinkDistance);
+
+        // Área de cobertura continua por clúster (más limpia que decenas de círculos)
+        for (const cluster of clusters) {
+          const clusterRadius = getCtoBubbleRadius(cluster);
+          const envelopeRadius = clampNumber(clusterRadius * 1.35 * 0.7, 67, 168);
+          const envelope = buildCoverageEnvelope(cluster, envelopeRadius, 14);
+
+          if (envelope.length < 3) continue;
+
+          const area = new window.google.maps.Polygon({
+            paths: envelope,
             strokeColor: color,
-            strokeOpacity: 0.45,
-            strokeWeight: 1.25,
+            strokeOpacity: 0.46,
+            strokeWeight: 1.15,
             fillColor: color,
             fillOpacity: 0.08,
             geodesic: true,
             clickable: false,
             map: mapInstanceRef.current,
           });
-          zoneOverlaysRef.current.push(polygon);
-          smoothHull.forEach((point) => bounds.extend(point));
-        } else {
-          const maxDistance = areaSeedPoints.reduce((acc, point) => {
-            return Math.max(acc, approxDistanceMeters(point, centroid));
-          }, 0);
-          const radius = areaSeedPoints.length === 1
-            ? 150
-            : clampNumber(maxDistance * 1.2, 170, 550);
-
-          const circle = new window.google.maps.Circle({
-            center: centroid,
-            radius,
-            strokeColor: color,
-            strokeOpacity: 0.45,
-            strokeWeight: 1.25,
-            fillColor: color,
-            fillOpacity: 0.08,
-            clickable: false,
-            map: mapInstanceRef.current,
-          });
-          zoneOverlaysRef.current.push(circle);
-          bounds.extend(centroid);
+          zoneOverlaysRef.current.push(area);
+          envelope.forEach((point) => bounds.extend(point));
         }
 
         const label = new window.google.maps.Marker({
@@ -834,7 +1069,6 @@ export default function App() {
       let preloadedZones: OdbZone[] = [];
       try {
         preloadedZones = await fetchSmartOltZones();
-        setZonesCount(preloadedZones.length);
         setZonesStatus('success');
       } catch (e) {
         console.error('Error cargando ODBs/Zonas SmartOLT antes de inicializar el mapa', e);
@@ -1583,12 +1817,12 @@ export default function App() {
 
             <CardContent className="p-6 sm:p-8 space-y-6">
               <div className="space-y-2.5">
-                <div className="mb-4 rounded-2xl border border-accent/20 bg-gradient-to-r from-accent/5 to-primary/5 p-4 shadow-sm">
+                <div className="mb-4 rounded-xl border-2 border-gray-200 bg-white/80 p-4">
                   <div className="mb-2 flex items-center justify-between gap-3">
                     <Label htmlFor="zoneSelector" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                       <MapPin className="h-4 w-4 text-accent" /> Selecciona tu zona de referencia
                     </Label>
-                    <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-gray-600 border border-gray-200">
+                    <span className="shrink-0 rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] font-semibold text-gray-600">
                       {zoneOptions.length} zonas
                     </span>
                   </div>
@@ -1607,12 +1841,12 @@ export default function App() {
                       }}
                       onFocus={() => setShowZoneSuggestions(true)}
                       onBlur={() => { setTimeout(() => setShowZoneSuggestions(false), 180); }}
-                      className="h-12 w-full rounded-xl border-2 border-white bg-white px-3 pr-10 text-sm text-gray-700 shadow-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:bg-gray-100"
+                      className="h-12 w-full rounded-xl border-2 border-gray-200 bg-white px-3 pr-10 text-sm text-gray-700 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20 disabled:cursor-not-allowed disabled:bg-gray-100"
                     />
                     <ChevronDown className={`pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-500 transition-transform ${showZoneSuggestions ? 'rotate-180' : ''}`} />
 
                     {showZoneSuggestions && (
-                      <ul className="absolute z-50 left-0 right-0 top-full mt-1 max-h-64 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg">
+                      <ul className="absolute z-50 left-0 right-0 top-full mt-1 max-h-64 overflow-y-auto rounded-xl border-2 border-gray-200 bg-white">
                         {zonesStatus === 'loading' && (
                           <li className="px-4 py-2.5 text-sm text-gray-500">Cargando zonas…</li>
                         )}
@@ -1625,7 +1859,7 @@ export default function App() {
                           <li
                             key={zone.key}
                             onMouseDown={() => handleZoneSelection(zone)}
-                            className={`cursor-pointer px-4 py-2.5 text-sm border-b last:border-0 border-gray-100 ${selectedZoneKey === zone.key ? 'bg-accent/10 text-primary font-semibold' : 'text-gray-700 hover:bg-accent/5'}`}
+                            className={`cursor-pointer border-b border-gray-100 px-4 py-2.5 text-sm last:border-0 ${selectedZoneKey === zone.key ? 'bg-accent/10 font-semibold text-gray-800' : 'text-gray-700 hover:bg-accent/5'}`}
                           >
                             {zone.zoneName}
                           </li>
@@ -1634,7 +1868,7 @@ export default function App() {
                     )}
                   </div>
 
-                  <p className="mt-2 text-xs text-gray-600">Si no te ubicas por dirección, usa este selector y luego confirma tu punto exacto en el mapa.</p>
+                  <p className="mt-2 text-xs text-gray-500">Si no te ubicas por dirección, usa este selector y luego confirma tu punto exacto en el mapa.</p>
                 </div>
 
                 <Label htmlFor="address" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
@@ -1704,13 +1938,6 @@ export default function App() {
                       <div className="relative">
                         <div ref={(el) => { mapContainerRef.current = el; }} className="h-56 sm:h-72 md:h-96 rounded-xl border-2 border-gray-200 overflow-hidden" />
                       </div>
-                      <p className="mt-2 text-xs text-gray-600">Si al escribir la dirección no te lleva automáticamente, selecciona tu punto exacto tocando/clickeando en el mapa.</p>
-                      <p className="mt-2 text-xs text-gray-500">
-                        {zonesStatus === 'loading' && 'Cargando zonas de cobertura…'}
-                        {zonesStatus === 'success' && `Zonas visibles desde SmartOLT: ${zonesCount}`}
-                        {zonesStatus === 'error' && 'No se pudieron cargar las zonas de cobertura'}
-                        {zonesStatus === 'idle' && 'Cargando zonas SmartOLT…'}
-                      </p>
                   </div>
                 </div>
                 {errors.address && <p className="text-sm text-destructive">{errors.address.message}</p>}
@@ -2002,10 +2229,10 @@ export default function App() {
               <div className="flex items-center gap-3 text-white">
                 <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-xl flex items-center justify-center">
                   <Calendar className="w-6 h-6" />
-                </div>
+                </div>  
                 <div>
-                  <h3 className="text-2xl font-bold">Fecha y Horario</h3>
-                  <p className="text-sm text-white/80">Selecciona días disponibles (Lunes a Viernes) esto puede variar dependiendo del horario de nuestros instaladores </p>
+                  <h3 className="text-2xl font-bold">Selecciona tu disponibilidad para agendar su visita</h3>
+                  <p className="text-sm text-white/80">Selecciona días disponibles (Lunes a Viernes) esto puede variar dependiendo del horario de nuestros instaladores  y no necesariamente sera el dia de tu instalación</p>
                 </div>
               </div>
             </div>
