@@ -558,7 +558,7 @@ export default function App() {
   const submitted = false;
   const [submitErrorMsg, setSubmitErrorMsg] = useState<string | null>(null);
   const [submissionStatus, setSubmissionStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
-  
+
   // Estado para controlar el loading del botón de ubicación
   const [isLocating, setIsLocating] = useState(false);
 
@@ -579,7 +579,7 @@ export default function App() {
       const path = (window.location.pathname || '').replace(/^\/+/, '').toLowerCase();
       if (path.includes('pyme')) return 'pyme' as const;
       if (path.includes('home') || path.includes('hogar')) return 'home' as const;
-    } catch (e) {}
+    } catch (e) { }
     return 'home' as const;
   };
 
@@ -605,7 +605,7 @@ export default function App() {
       if (!el) el = document.querySelector('input[name], select[name], textarea[name]');
       if (el && (el as HTMLElement).scrollIntoView) {
         (el as HTMLElement).scrollIntoView({ behavior: 'smooth', block: 'center' });
-        try { (el as HTMLElement).focus(); } catch (e) {}
+        try { (el as HTMLElement).focus(); } catch (e) { }
       }
     } catch (e) {
       // ignore
@@ -653,7 +653,7 @@ export default function App() {
           setIdFrontError(msg);
           if (e?.target) e.target.value = '';
           setIdFrontName('');
-          try { setValue('idFront', new DataTransfer().files); } catch (err) {}
+          try { setValue('idFront', new DataTransfer().files); } catch (err) { }
           return;
         }
         const res = await checkImageResolution(f);
@@ -663,7 +663,7 @@ export default function App() {
           setIdFrontError(msg);
           if (e?.target) e.target.value = '';
           setIdFrontName('');
-          try { setValue('idFront', new DataTransfer().files); } catch (err) {}
+          try { setValue('idFront', new DataTransfer().files); } catch (err) { }
           return;
         }
         setIdFrontError('');
@@ -683,7 +683,7 @@ export default function App() {
           setIdBackError(msg);
           if (e?.target) e.target.value = '';
           setIdBackName('');
-          try { setValue('idBack', new DataTransfer().files); } catch (err) {}
+          try { setValue('idBack', new DataTransfer().files); } catch (err) { }
           return;
         }
         const res = await checkImageResolution(f);
@@ -693,7 +693,7 @@ export default function App() {
           setIdBackError(msg);
           if (e?.target) e.target.value = '';
           setIdBackName('');
-          try { setValue('idBack', new DataTransfer().files); } catch (err) {}
+          try { setValue('idBack', new DataTransfer().files); } catch (err) { }
           return;
         }
         if (!hasIdFront) {
@@ -742,11 +742,11 @@ export default function App() {
     for (const overlay of zoneOverlaysRef.current) {
       try {
         if (typeof overlay?.setMap === 'function') overlay.setMap(null);
-      } catch (e) {}
+      } catch (e) { }
     }
 
     if (zoneZoomListenerRef.current && window.google?.maps?.event?.removeListener) {
-      try { window.google.maps.event.removeListener(zoneZoomListenerRef.current); } catch (e) {}
+      try { window.google.maps.event.removeListener(zoneZoomListenerRef.current); } catch (e) { }
       zoneZoomListenerRef.current = null;
     }
 
@@ -939,12 +939,12 @@ export default function App() {
         const currentZoom = mapInstanceRef.current?.getZoom?.() ?? 0;
         const visible = currentZoom >= 16;
         for (const marker of zoneLabelMarkersRef.current) {
-          try { marker.setVisible(visible); } catch (e) {}
+          try { marker.setVisible(visible); } catch (e) { }
         }
       };
 
       if (zoneZoomListenerRef.current && window.google?.maps?.event?.removeListener) {
-        try { window.google.maps.event.removeListener(zoneZoomListenerRef.current); } catch (e) {}
+        try { window.google.maps.event.removeListener(zoneZoomListenerRef.current); } catch (e) { }
       }
       zoneZoomListenerRef.current = mapInstanceRef.current.addListener('zoom_changed', updateZoneLabelsVisibility);
       updateZoneLabelsVisibility();
@@ -976,24 +976,24 @@ export default function App() {
 
       // Usar AdvancedMarkerElement si está disponible (evita warnings de depreciación)
       const { AdvancedMarkerElement } = window.google.maps.marker || {};
-      
+
       if (AdvancedMarkerElement) {
-         markerRef.current = new AdvancedMarkerElement({
-            map: mapInstanceRef.current,
-            position: pos,
-         });
+        markerRef.current = new AdvancedMarkerElement({
+          map: mapInstanceRef.current,
+          position: pos,
+        });
       } else {
-         // Fallback legacy
-         markerRef.current = new window.google.maps.Marker({
-            position: pos,
-            map: mapInstanceRef.current
-         });
+        // Fallback legacy
+        markerRef.current = new window.google.maps.Marker({
+          position: pos,
+          map: mapInstanceRef.current
+        });
       }
 
       if (pan) mapInstanceRef.current.panTo(pos);
       mapInstanceRef.current.setZoom(16);
     } catch (e) {
-       console.error("Error actualizando marcador", e);
+      console.error("Error actualizando marcador", e);
     }
   };
 
@@ -1090,7 +1090,7 @@ export default function App() {
 
       const allZonePoints = preloadedZones.flatMap((z) => z.points);
       const defaultCenter = allZonePoints.length > 0 ? computeCentroid(allZonePoints) : { lat: -35.4269, lng: -71.6554 };
-      
+
       const onMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
       // mapId es necesario para AdvancedMarkerElement. 'DEMO_MAP_ID' es válido para desarrollo.
@@ -1170,7 +1170,7 @@ export default function App() {
     setIsLocating(true);
 
     const applyPosition = async (lat: number, lng: number) => {
-      try { await ensureMapsLoaded(); } catch (_e) {}
+      try { await ensureMapsLoaded(); } catch (_e) { }
       if (!mapInstanceRef.current && mapContainerRef.current) await initMiniMap();
       updateMapMarker(lat, lng);
       reverseGeocodeAndFill(lat, lng);
@@ -1305,7 +1305,7 @@ export default function App() {
   };
 
   const getValidDates = () => {
-    const dates: {date: Date, formatted: string}[] = [];
+    const dates: { date: Date, formatted: string }[] = [];
     const now = new Date();
     const baseDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0, 0);
     const twoWeeksLater = addDaysKeepingLocal(baseDate, 14);
@@ -1364,7 +1364,7 @@ export default function App() {
       if (section && section.options && section.options.length > 0) {
         setValue('plan', section.options[0].value, { shouldValidate: true, shouldDirty: false });
       }
-    } catch (e) {}
+    } catch (e) { }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planCategory]);
 
@@ -1428,7 +1428,7 @@ export default function App() {
         if (path.includes('pyme')) setPlanCategory('pyme');
         if (path.includes('home') || path.includes('hogar')) setPlanCategory('home');
       }
-    } catch (e) {}
+    } catch (e) { }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1509,28 +1509,28 @@ export default function App() {
   };
 
   const onSubmit = async (data: FormData) => {
-      // Trigger validation for all fields before proceeding
-      const allValid = await trigger();
-      if (!allValid) {
-        const msgs: string[] = [];
-        try {
-          for (const [k, v] of Object.entries(errors)) {
-            if (v && (v as any).message) msgs.push(`${k}: ${(v as any).message}`);
-          }
-        } catch (e) {}
-        const summary = msgs.length > 0 ? msgs.join(' — ') : 'Faltan o hay campos inválidos en el formulario';
-        toast.error(summary);
-        setSubmissionStatus('error');
-        setIsSubmitting(false);
-        // scroll to first invalid field
-        try { const first = Object.keys(errors)[0]; scrollToField(first); } catch (e) { scrollToField(undefined); }
-        setTimeout(() => setSubmissionStatus('idle'), 2000);
-        return;
-      }
+    // Trigger validation for all fields before proceeding
+    const allValid = await trigger();
+    if (!allValid) {
+      const msgs: string[] = [];
+      try {
+        for (const [k, v] of Object.entries(errors)) {
+          if (v && (v as any).message) msgs.push(`${k}: ${(v as any).message}`);
+        }
+      } catch (e) { }
+      const summary = msgs.length > 0 ? msgs.join(' — ') : 'Faltan o hay campos inválidos en el formulario';
+      toast.error(summary);
+      setSubmissionStatus('error');
+      setIsSubmitting(false);
+      // scroll to first invalid field
+      try { const first = Object.keys(errors)[0]; scrollToField(first); } catch (e) { scrollToField(undefined); }
+      setTimeout(() => setSubmissionStatus('idle'), 2000);
+      return;
+    }
 
-      setSubmissionStatus('loading');
-      setIsSubmitting(true);
-      setSubmitErrorMsg(null);
+    setSubmissionStatus('loading');
+    setIsSubmitting(true);
+    setSubmitErrorMsg(null);
 
     try {
       if (selectedDates.length === 0) {
@@ -1580,8 +1580,8 @@ export default function App() {
       formData.append('neighborhood', data.neighborhood);
       formData.append('city', data.city);
       formData.append('postalCode', data.postalCode);
-      const phoneDigits = String(data.phone || '').replace(/\D/g, '').slice(0,9);
-      const additionalDigits = String(data.additionalPhone || '').replace(/\D/g, '').slice(0,9);
+      const phoneDigits = String(data.phone || '').replace(/\D/g, '').slice(0, 9);
+      const additionalDigits = String(data.additionalPhone || '').replace(/\D/g, '').slice(0, 9);
       formData.append('phone', phoneDigits);
       formData.append('additionalPhone', additionalDigits || '');
       formData.append('comments', data.comments || '');
@@ -1601,16 +1601,16 @@ export default function App() {
 
       if (!response.ok) {
         let errBody: any = null;
-        try { errBody = await response.json(); } catch (e) {}
+        try { errBody = await response.json(); } catch (e) { }
         let errText = `${response.status} ${response.statusText}`;
         if (errBody && typeof errBody === 'object') {
-           try {
-             const parts: string[] = [];
-             for (const [k, v] of Object.entries(errBody)) {
-                parts.push(`${k}: ${Array.isArray(v) ? v.join(', ') : v}`);
-             }
-             if (parts.length > 0) errText = parts.join(' — ');
-           } catch(e) { errText = JSON.stringify(errBody); }
+          try {
+            const parts: string[] = [];
+            for (const [k, v] of Object.entries(errBody)) {
+              parts.push(`${k}: ${Array.isArray(v) ? v.join(', ') : v}`);
+            }
+            if (parts.length > 0) errText = parts.join(' — ');
+          } catch (e) { errText = JSON.stringify(errBody); }
         }
         setSubmitErrorMsg(errText);
         setSubmissionStatus('error');
@@ -1643,77 +1643,77 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50/50 via-white to-orange-50/50">
-{(isSubmitting || submissionStatus !== 'idle') && (
-  <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm">
-    <div className="flex flex-col items-center gap-6 rounded-2xl bg-white px-10 py-8 shadow-2xl animate-fadeIn">
+      {(isSubmitting || submissionStatus !== 'idle') && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-6 rounded-2xl bg-white px-10 py-8 shadow-2xl animate-fadeIn">
 
-      {/* CÍRCULO CENTRAL */}
-      <div
-        className={`
+            {/* CÍRCULO CENTRAL */}
+            <div
+              className={`
           relative flex h-20 w-20 items-center justify-center rounded-full
           transition-all duration-500
           ${submissionStatus === 'loading' ? 'bg-primary/10' : ''}
           ${submissionStatus === 'success' ? 'bg-emerald-500' : ''}
           ${submissionStatus === 'error' ? 'bg-red-500' : ''}
         `}
-      >
-        {/* SPINNER */}
-        {submissionStatus === 'loading' && (
-          <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary/30 border-t-primary" />
-        )}
+            >
+              {/* SPINNER */}
+              {submissionStatus === 'loading' && (
+                <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary/30 border-t-primary" />
+              )}
 
-        {/* CHECK */}
-        {submissionStatus === 'success' && (
-          <svg
-            viewBox="0 0 24 24"
-            className="h-10 w-10 text-white animate-check"
-            fill="none"
-          >
-            <path
-              d="M5 13l4 4L19 7"
-              stroke="currentColor"
-              strokeWidth="3"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        )}
+              {/* CHECK */}
+              {submissionStatus === 'success' && (
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-10 w-10 text-white animate-check"
+                  fill="none"
+                >
+                  <path
+                    d="M5 13l4 4L19 7"
+                    stroke="currentColor"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </svg>
+              )}
 
-        {/* ERROR */}
-        {submissionStatus === 'error' && (
-          <svg
-            viewBox="0 0 24 24"
-            className="h-10 w-10 text-white animate-shake"
-            fill="none"
-          >
-            <path
-              d="M6 6l12 12M18 6L6 18"
-              stroke="currentColor"
-              strokeWidth="3"
-              strokeLinecap="round"
-            />
-          </svg>
-        )}
-      </div>
+              {/* ERROR */}
+              {submissionStatus === 'error' && (
+                <svg
+                  viewBox="0 0 24 24"
+                  className="h-10 w-10 text-white animate-shake"
+                  fill="none"
+                >
+                  <path
+                    d="M6 6l12 12M18 6L6 18"
+                    stroke="currentColor"
+                    strokeWidth="3"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              )}
+            </div>
 
-      {/* TEXTO */}
-      <div className="text-center">
-        <p className="text-base font-semibold text-gray-800">
-          {submissionStatus === 'loading' && 'Enviando solicitud'}
-          {submissionStatus === 'success' && 'Solicitud enviada'}
-          {submissionStatus === 'error' && 'Error al enviar'}
-        </p>
+            {/* TEXTO */}
+            <div className="text-center">
+              <p className="text-base font-semibold text-gray-800">
+                {submissionStatus === 'loading' && 'Enviando solicitud'}
+                {submissionStatus === 'success' && 'Solicitud enviada'}
+                {submissionStatus === 'error' && 'Error al enviar'}
+              </p>
 
-        <p className="mt-1 text-sm text-gray-500">
-          {submissionStatus === 'loading' && 'Por favor espera…'}
-          {submissionStatus === 'success' && 'Redirigiendo…'}
-          {submissionStatus === 'error' && 'Corrige los campos faltantes'}
-        </p>
-      </div>
+              <p className="mt-1 text-sm text-gray-500">
+                {submissionStatus === 'loading' && 'Por favor espera…'}
+                {submissionStatus === 'success' && 'Redirigiendo…'}
+                {submissionStatus === 'error' && 'Corrige los campos faltantes'}
+              </p>
+            </div>
 
-    </div>
-  </div>
-)}
+          </div>
+        </div>
+      )}
 
       <header className="bg-white border-b border-gray-200 shadow-md sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-5">
@@ -1752,7 +1752,7 @@ export default function App() {
                 </div>
               </div>
             </div>
-            
+
             <CardContent className="p-6 sm:p-8 space-y-6">
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                 <div className="space-y-2.5">
@@ -1773,18 +1773,18 @@ export default function App() {
                   <Label htmlFor="ci" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                     <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Cédula de Identidad <span className="text-accent">*</span>
                   </Label>
-                    <Input id="ci" placeholder="Ej. 12.345.678-5"
-                      {...register('ci', {
-                        required: 'Este campo es requerido',
-                        onChange: (e) => {
-                          const val = formatRut(e.target.value);
-                          e.target.value = val;
-                          setValue('ci', val, { shouldValidate: true });
-                        },
-                        validate: (value) => validateRut(value) || 'RUT inválido',
-                      })}
-                      className="h-12 border-2 border-gray-200 focus:border-accent rounded-xl"
-                    />
+                  <Input id="ci" placeholder="Ej. 12.345.678-5"
+                    {...register('ci', {
+                      required: 'Este campo es requerido',
+                      onChange: (e) => {
+                        const val = formatRut(e.target.value);
+                        e.target.value = val;
+                        setValue('ci', val, { shouldValidate: true });
+                      },
+                      validate: (value) => validateRut(value) || 'RUT inválido',
+                    })}
+                    className="h-12 border-2 border-gray-200 focus:border-accent rounded-xl"
+                  />
                   {errors.ci && <p className="text-sm text-destructive">{errors.ci.message}</p>}
                 </div>
                 <div className="space-y-2.5">
@@ -1926,18 +1926,18 @@ export default function App() {
                         className="h-12 w-12 p-0 flex items-center justify-center rounded-xl border-2 border-gray-200 bg-white/60 hover:bg-white"
                         aria-label="Usar mi ubicación"
                       >
-                         {isLocating ? (
-                            <Loader2 className="w-5 h-5 text-accent animate-spin" />
-                         ) : (
-                            <MapPin className="w-5 h-5 text-gray-700" />
-                         )}
+                        {isLocating ? (
+                          <Loader2 className="w-5 h-5 text-accent animate-spin" />
+                        ) : (
+                          <MapPin className="w-5 h-5 text-gray-700" />
+                        )}
                       </Button>
                     </div>
                   </div>
-                    <div className="mt-3">
-                      <div className="relative">
-                        <div ref={(el) => { mapContainerRef.current = el; }} className="h-56 sm:h-72 md:h-96 rounded-xl border-2 border-gray-200 overflow-hidden" />
-                      </div>
+                  <div className="mt-3">
+                    <div className="relative">
+                      <div ref={(el) => { mapContainerRef.current = el; }} className="h-56 sm:h-72 md:h-96 rounded-xl border-2 border-gray-200 overflow-hidden" />
+                    </div>
                   </div>
                 </div>
                 {errors.address && <p className="text-sm text-destructive">{errors.address.message}</p>}
@@ -2155,8 +2155,8 @@ export default function App() {
                 {/* ID Front */}
                 <div className="space-y-3">
                   <Label htmlFor="idFront" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
-                      <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Cedula de Identidad/Carnet (Frente)
-                    </Label>
+                    <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Cedula de Identidad/Carnet (Frente)
+                  </Label>
                   <div className="relative group">
                     <input id="idFront" type="file" accept="image/jpeg,image/png" capture="environment" {...idFrontRegister} ref={(el) => { idFrontRegister.ref(el); idFrontFileInputRef.current = el; }} className="hidden" />
                     <label htmlFor="idFront" onClick={() => { if (idFrontFileInputRef.current) idFrontFileInputRef.current.value = ''; }} className="flex items-center justify-center gap-3 h-14 bg-gradient-to-r from-accent to-accent/90 hover:from-accent/90 hover:to-accent text-white rounded-xl cursor-pointer shadow-md font-semibold">
@@ -2188,7 +2188,7 @@ export default function App() {
                     <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Comprobante de Domicilio
                   </Label>
                   <div className="relative group">
-                    <input id="addressProof" type="file" accept="image/jpeg,image/png" capture="environment" {...register('addressProof', { onChange: async (e) => { const files = e.target.files; if (files?.length) { const f = files[0]; if (!isAllowedImage(f)) { toast.error('Solo se permiten imágenes JPG o PNG'); if (e?.target) e.target.value = ''; setAddressProofName(''); try { setValue('addressProof', new DataTransfer().files); } catch (err) {} return; } const res = await checkImageResolution(f); if (!res.ok) { toast.error(`Resolución insuficiente: mínimo ${MIN_IMAGE_WIDTH}x${MIN_IMAGE_HEIGHT}px — imagen ${res.width}x${res.height}px`); if (e?.target) e.target.value = ''; setAddressProofName(''); try { setValue('addressProof', new DataTransfer().files); } catch (err) {} return; } setAddressProofName(f.name); } } })} className="hidden" />
+                    <input id="addressProof" type="file" accept="image/jpeg,image/png" capture="environment" {...register('addressProof', { onChange: async (e) => { const files = e.target.files; if (files?.length) { const f = files[0]; if (!isAllowedImage(f)) { toast.error('Solo se permiten imágenes JPG o PNG'); if (e?.target) e.target.value = ''; setAddressProofName(''); try { setValue('addressProof', new DataTransfer().files); } catch (err) { } return; } const res = await checkImageResolution(f); if (!res.ok) { toast.error(`Resolución insuficiente: mínimo ${MIN_IMAGE_WIDTH}x${MIN_IMAGE_HEIGHT}px — imagen ${res.width}x${res.height}px`); if (e?.target) e.target.value = ''; setAddressProofName(''); try { setValue('addressProof', new DataTransfer().files); } catch (err) { } return; } setAddressProofName(f.name); } } })} className="hidden" />
                     <label htmlFor="addressProof" className="flex items-center justify-center gap-3 h-14 bg-gradient-to-r from-accent to-accent/90 hover:from-accent/90 hover:to-accent text-white rounded-xl cursor-pointer shadow-md font-semibold">
                       <Upload className="w-5 h-5" /> {addressProofName ? 'Cambiar archivo' : 'Seleccionar archivo'}
                     </label>
@@ -2229,10 +2229,28 @@ export default function App() {
               <div className="flex items-center gap-3 text-white">
                 <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-xl flex items-center justify-center">
                   <Calendar className="w-6 h-6" />
-                </div>  
+                </div>
                 <div>
-                  <h3 className="text-2xl font-bold">Selecciona tu disponibilidad para agendar su visita</h3>
-                  <p className="text-sm text-white/80">Selecciona días disponibles (Lunes a Viernes) esto puede variar dependiendo del horario de nuestros instaladores  y no necesariamente sera el dia de tu instalación</p>
+                  <h3 className="text-2xl font-bold">Selecciona tu disponibilidad para agendar la instalación</h3>
+                  {/* Nota importante debajo del título, más delgada y simple */}
+                  <div className="mt-2 w-full">
+                    <div className="flex items-center gap-2 px-2 py-1 rounded-lg border border-red-200 bg-red-50/80">
+                      <div className="flex h-6 w-6 items-center justify-center rounded-md bg-red-700">
+                        <span className="text-white text-xs font-bold">!</span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <span className="block text-[11px] font-black uppercase tracking-widest text-red-700/70 leading-tight">Nota Importante</span>
+                        <span className="block text-[11px] font-semibold text-red-900 leading-tight">
+                          <span className="inline">
+                            Elige los días de tu interés. El horario final queda sujeto a confirmación por parte de los agente de ventas según disponibilidad y
+                            <span className="ml-1 rounded-sm bg-red-100 px-1 text-red-700 underline decoration-red-400 underline-offset-2">
+                              no necesariamente será el día de tu instalación.
+                            </span>
+                          </span>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2271,7 +2289,7 @@ export default function App() {
                     <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Hasta <span className="text-accent">*</span>
                   </Label>
                   <Controller name="timeTo" control={control} rules={{ required: 'Este campo es requerido', validate: (v) => validateTimeRange(timeFromValue || '', v) }} render={({ field }) => (
-                    <TimeSelect id="timeTo" tone="accent" disabled={!timeFromValue} value={field.value} onValueChange={(v) => { field.onChange(v); try { clearErrors('timeTo'); } catch (e) {} }} options={filteredTimeToOptions} placeholder={timeFromValue ? 'Seleccionar hora' : 'Selecciona "Desde" primero'} />
+                    <TimeSelect id="timeTo" tone="accent" disabled={!timeFromValue} value={field.value} onValueChange={(v) => { field.onChange(v); try { clearErrors('timeTo'); } catch (e) { } }} options={filteredTimeToOptions} placeholder={timeFromValue ? 'Seleccionar hora' : 'Selecciona "Desde" primero'} />
                   )} />
                   {errors.timeTo && <p className="text-sm text-destructive">{errors.timeTo.message}</p>}
                 </div>
@@ -2373,13 +2391,13 @@ export default function App() {
         whileHover={{ scale: 1.1 }}
         whileTap={{ scale: 0.95 }}
       >
-        <svg 
-          viewBox="0 0 24 24" 
-          className="w-9 h-9" 
+        <svg
+          viewBox="0 0 24 24"
+          className="w-9 h-9"
           fill="white"
           xmlns="http://www.w3.org/2000/svg"
         >
-          <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/>
+          <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z" />
         </svg>
       </motion.a>
     </div>
