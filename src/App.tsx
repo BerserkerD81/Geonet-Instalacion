@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { ProcessingModal } from './components/ui/ProcessingModal';
 import ReactCountryFlag from 'react-country-flag';
 import { Controller, useForm } from 'react-hook-form';
 import { Button } from './components/ui/button';
@@ -116,9 +117,11 @@ const computeCentroid = (points: Array<{ lat: number; lng: number }>) => {
     (acc, p) => ({ lat: acc.lat + p.lat, lng: acc.lng + p.lng }),
     { lat: 0, lng: 0 },
   );
+  const n = points.length;
+  if (n === 0) return { lat: 0, lng: 0 };
   return {
-    lat: total.lat / points.length,
-    lng: total.lng / points.length,
+    lat: total.lat / n,
+    lng: total.lng / n,
   };
 };
 
@@ -1643,77 +1646,36 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50/50 via-white to-orange-50/50">
-      {(isSubmitting || submissionStatus !== 'idle') && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-6 rounded-2xl bg-white px-10 py-8 shadow-2xl animate-fadeIn">
-
-            {/* CÍRCULO CENTRAL */}
-            <div
-              className={`
-          relative flex h-20 w-20 items-center justify-center rounded-full
-          transition-all duration-500
-          ${submissionStatus === 'loading' ? 'bg-primary/10' : ''}
-          ${submissionStatus === 'success' ? 'bg-emerald-500' : ''}
-          ${submissionStatus === 'error' ? 'bg-red-500' : ''}
-        `}
-            >
-              {/* SPINNER */}
-              {submissionStatus === 'loading' && (
-                <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary/30 border-t-primary" />
-              )}
-
-              {/* CHECK */}
-              {submissionStatus === 'success' && (
-                <svg
-                  viewBox="0 0 24 24"
-                  className="h-10 w-10 text-white animate-check"
-                  fill="none"
-                >
-                  <path
-                    d="M5 13l4 4L19 7"
-                    stroke="currentColor"
-                    strokeWidth="3"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
-              )}
-
-              {/* ERROR */}
-              {submissionStatus === 'error' && (
-                <svg
-                  viewBox="0 0 24 24"
-                  className="h-10 w-10 text-white animate-shake"
-                  fill="none"
-                >
-                  <path
-                    d="M6 6l12 12M18 6L6 18"
-                    stroke="currentColor"
-                    strokeWidth="3"
-                    strokeLinecap="round"
-                  />
-                </svg>
-              )}
-            </div>
-
-            {/* TEXTO */}
-            <div className="text-center">
-              <p className="text-base font-semibold text-gray-800">
-                {submissionStatus === 'loading' && 'Enviando solicitud'}
-                {submissionStatus === 'success' && 'Solicitud enviada'}
-                {submissionStatus === 'error' && 'Error al enviar'}
-              </p>
-
-              <p className="mt-1 text-sm text-gray-500">
-                {submissionStatus === 'loading' && 'Por favor espera…'}
-                {submissionStatus === 'success' && 'Redirigiendo…'}
-                {submissionStatus === 'error' && 'Corrige los campos faltantes'}
-              </p>
-            </div>
-
-          </div>
-        </div>
-      )}
+      <ProcessingModal
+        isOpen={isSubmitting || submissionStatus !== 'idle'}
+        status={
+          submissionStatus === 'loading'
+            ? 'loading'
+            : submissionStatus === 'success'
+            ? 'success'
+            : submissionStatus === 'error'
+            ? 'error'
+            : 'loading'
+        }
+        title={
+          submissionStatus === 'loading'
+            ? 'Enviando solicitud'
+            : submissionStatus === 'success'
+            ? 'Solicitud enviada'
+            : submissionStatus === 'error'
+            ? 'Error al enviar'
+            : undefined
+        }
+        description={
+          submissionStatus === 'loading'
+            ? 'Por favor espera…'
+            : submissionStatus === 'success'
+            ? 'Redirigiendo…'
+            : submissionStatus === 'error'
+            ? 'Corrige los campos faltantes'
+            : undefined
+        }
+      />
 
       <header className="bg-white border-b border-gray-200 shadow-md sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-5">
