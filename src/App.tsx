@@ -730,9 +730,9 @@ export default function App() {
   const [showZoneSuggestions, setShowZoneSuggestions] = useState(false);
 
   const getEffectiveGoogleKey = () => {
-    const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
     const runtimeKey = window.__ENV__?.VITE_GOOGLE_MAPS_API_KEY;
-    return apiKey || runtimeKey || '';
+    const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as string | undefined;
+    return runtimeKey || apiKey || '';
   };
 
   const ensureMapsLoaded = async () => {
