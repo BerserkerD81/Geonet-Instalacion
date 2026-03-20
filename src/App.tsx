@@ -1511,6 +1511,16 @@ export default function App() {
     };
   };
 
+  // Elimina tildes y caracteres especiales de nombres
+  const removeAccentsAndSpecials = (str: string) => {
+    return str
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '') // elimina tildes
+      .replace(/[^a-zA-Z0-9\s]/g, '') // elimina otros caracteres especiales excepto espacios
+      .replace(/\s+/g, ' ') // colapsa espacios múltiples
+      .trim();
+  };
+
   const onSubmit = async (data: FormData) => {
     // Trigger validation for all fields before proceeding
     const allValid = await trigger();
@@ -1573,8 +1583,11 @@ export default function App() {
       // Las imágenes no son obligatorias (idFront/idBack/comprobante/cupón opcionales)
 
       const formData = new window.FormData();
-      formData.append('firstName', data.firstName);
-      formData.append('lastName', data.lastName);
+      // Sanitizar nombres antes de enviar
+      const cleanFirstName = removeAccentsAndSpecials(data.firstName);
+      const cleanLastName = removeAccentsAndSpecials(data.lastName);
+      formData.append('firstName', cleanFirstName);
+      formData.append('lastName', cleanLastName);
       formData.append('ci', data.ci);
       formData.append('email', data.email);
       formData.append('plan', data.plan);
