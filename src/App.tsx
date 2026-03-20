@@ -557,6 +557,8 @@ const addDaysKeepingLocal = (date: Date, days: number) => {
 
 export default function App() {
   const { register, handleSubmit, formState: { errors }, setValue, watch, control, clearErrors, trigger } = useForm<FormData>();
+
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitted = false;
   const [submitErrorMsg, setSubmitErrorMsg] = useState<string | null>(null);
@@ -1734,14 +1736,38 @@ export default function App() {
                   <Label htmlFor="firstName" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                     <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Nombre(s) <span className="text-accent">*</span>
                   </Label>
-                  <Input id="firstName" placeholder="Ej. Juan Carlos" {...register('firstName', { required: 'Este campo es requerido' })} className="h-12 border-2 border-gray-200 focus:border-accent rounded-xl" />
+                  <Input
+                    id="firstName"
+                    placeholder="Ej. Juan Carlos"
+                    {...register('firstName', {
+                      required: 'Este campo es requerido',
+                      onChange: (e) => {
+                        const clean = removeAccentsAndSpecials(e.target.value);
+                        setValue('firstName', clean, { shouldValidate: true, shouldDirty: true });
+                        return e;
+                      },
+                    })}
+                    className="h-12 border-2 border-gray-200 focus:border-accent rounded-xl"
+                  />
                   {errors.firstName && <p className="text-sm text-destructive">{errors.firstName.message}</p>}
                 </div>
                 <div className="space-y-2.5">
                   <Label htmlFor="lastName" className="text-sm font-semibold text-gray-700 flex items-center gap-2">
                     <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Apellidos <span className="text-accent">*</span>
                   </Label>
-                  <Input id="lastName" placeholder="Ej. García Rodríguez" {...register('lastName', { required: 'Este campo es requerido' })} className="h-12 border-2 border-gray-200 focus:border-accent rounded-xl" />
+                  <Input
+                    id="lastName"
+                    placeholder="Ej. Garcia Rodriguez"
+                    {...register('lastName', {
+                      required: 'Este campo es requerido',
+                      onChange: (e) => {
+                        const clean = removeAccentsAndSpecials(e.target.value);
+                        setValue('lastName', clean, { shouldValidate: true, shouldDirty: true });
+                        return e;
+                      },
+                    })}
+                    className="h-12 border-2 border-gray-200 focus:border-accent rounded-xl"
+                  />
                   {errors.lastName && <p className="text-sm text-destructive">{errors.lastName.message}</p>}
                 </div>
                 <div className="space-y-2.5">
