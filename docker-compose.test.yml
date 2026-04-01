@@ -1,0 +1,20 @@
+services:
+  webtest:
+    image: geonet-frontend:test
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      VITE_GOOGLE_MAPS_API_KEY: ${VITE_GOOGLE_MAPS_API_KEY}
+      SMARTOLT_GET_ODBS_URL: ${SMARTOLT_GET_ODBS_URL:-https://geonet-cl.smartolt.com/api/system/get_odbs}
+      SMARTOLT_X_TOKEN: ${SMARTOLT_X_TOKEN}
+    ports:
+      - "9090:80"
+    restart: unless-stopped
+    networks:
+      - instalaciones_network
+
+networks:
+  instalaciones_network:
+    external: true
+    name: instalaciones_network

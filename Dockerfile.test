@@ -1,0 +1,30 @@
+# ---- Build stage (test) ----
+FROM node:20-alpine AS build
+
+WORKDIR /app
+
+# Install deps first (better layer caching)
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+# Copy source and build into a test-specific output folder
+COPY . .
+# Use Vite CLI outDir to write build into `dist-test` so it stays separate from prod
+RUN npm run build -- --outDir=dist-test
+
+# ---- Runtime stage (test) ----
+FROM nginx:1.27-alpine AS runtime
+
+# Use a test-specific nginx config that serves from /usr/share/nginx/html-test
+COPY nginx/default.test.conf /etc/nginx/conf.d/default.conf
+
+# Runtime env injection (test entrypoint writes env.js into html-test)
+COPY nginx/entrypoint.test.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Vite build output (test) copied to a separate folder to avoid colliding with prod
+COPY --from=build /app/dist-test /usr/share/nginx/html-test
+
+EXPOSE 80
+
+ENTRYPOINT ["/entrypoint.sh"]
