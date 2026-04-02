@@ -595,6 +595,7 @@ export default function App() {
   const [selectedZoneKey, setSelectedZoneKey] = useState('');
   const [zoneSearchTerm, setZoneSearchTerm] = useState('');
   const [showZoneSuggestions, setShowZoneSuggestions] = useState(false);
+  const [mapsLoadError, setMapsLoadError] = useState<string | null>(null);
 
   const getEffectiveGoogleKey = () => {
     const runtimeKey = window.__ENV__?.VITE_GOOGLE_MAPS_API_KEY;
@@ -796,13 +797,14 @@ export default function App() {
       let preloadedZones: OdbZone[] = [];
       try { preloadedZones = await fetchSmartOltZones(); setZonesStatus('success'); }
       catch (e) { console.error('Error cargando ODBs/Zonas SmartOLT antes de inicializar el mapa', e); setZonesStatus('error'); }
-      try { await ensureMapsLoaded(); } catch (e) { console.warn('Google Maps not loaded, minimap disabled'); return; }
+      try { await ensureMapsLoaded(); setMapsLoadError(null); } catch (e) { console.warn('Google Maps not loaded, minimap disabled', e); setMapsLoadError(String(e ?? 'Error cargando Google Maps')); return; }
       if (!window.google?.maps) return;
       if (mapInstanceRef.current) { if (!zonesRenderedRef.current) void renderSmartOltZones(true); return; }
       const allZonePoints = preloadedZones.flatMap((z) => z.points);
       const defaultCenter = allZonePoints.length > 0 ? computeCentroid(allZonePoints) : { lat: -35.4269, lng: -71.6554 };
       const onMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-      mapInstanceRef.current = new window.google.maps.Map(mapContainerRef.current, { center: defaultCenter, zoom: 13, zoomControl: !onMobile, fullscreenControl: !onMobile, streetViewControl: false, mapTypeControl: false, clickableIcons: false, gestureHandling: 'greedy', mapId: 'DEMO_MAP_ID' });
+      const gestureHandling = onMobile ? 'cooperative' : 'greedy';
+      mapInstanceRef.current = new window.google.maps.Map(mapContainerRef.current, { center: defaultCenter, zoom: 13, zoomControl: !onMobile, fullscreenControl: !onMobile, streetViewControl: false, mapTypeControl: false, clickableIcons: false, gestureHandling, mapId: 'DEMO_MAP_ID' });
       mapInstanceRef.current.addListener('click', (ev: any) => {
         const lat = ev.latLng.lat();
         const lng = ev.latLng.lng();
@@ -1482,7 +1484,7 @@ export default function App() {
                   <div className="w-1.5 h-1.5 bg-accent rounded-full"></div> Dirección completa <span className="text-accent">*</span>
                 </Label>
                 <div className="relative">
-                  <div className="flex gap-3 items-center">
+                  <div className="flex gap-3 items-center flex-wrap">
                     <div className="flex-1 relative">
                       <Input
                         id="address"
@@ -1522,7 +1524,13 @@ export default function App() {
                     </div>
                   </div>
                   <div className="mt-3">
-                    <div ref={(el) => { mapContainerRef.current = el; }} className="h-56 sm:h-72 md:h-96 rounded-xl border-2 border-gray-200 overflow-hidden" />
+                    {mapsLoadError ? (
+                      <div className="h-[40vh] sm:h-72 md:h-96 rounded-xl border-2 border-gray-200 overflow-hidden flex items-center justify-center p-4 text-sm text-gray-500">
+                        Mapa no disponible en este dispositivo. Usa la búsqueda de dirección o prueba desde un equipo.
+                      </div>
+                    ) : (
+                      <div ref={(el) => { mapContainerRef.current = el; }} className="h-[40vh] sm:h-72 md:h-96 rounded-xl border-2 border-gray-200 overflow-hidden" />
+                    )}
                   </div>
                 </div>
                 {errors.address && <p className="text-sm text-destructive">{errors.address.message}</p>}
@@ -1620,7 +1628,7 @@ export default function App() {
                             <label key={opt.value}
                               className={`cursor-pointer rounded-2xl border-2 p-5 transition-all flex flex-col gap-3 ${isSelected ? 'border-accent bg-accent/5 shadow-lg scale-[1.01]' : 'border-gray-200 bg-white/70 hover:border-accent/50 hover:shadow-md'}`}>
                               <input type="radio" value={opt.value} className="sr-only" {...register('plan', { required: 'Este campo es requerido' })} />
-                              <div className="flex items-start justify-between gap-2">
+                              <div className="flex flex-col items-center gap-2 text-center">
                                 <div>
                                   <p className="text-sm font-bold text-gray-500 uppercase tracking-wide">{opt.label.split(' ').slice(0, 2).join(' ')}</p>
                                   <p className="text-base font-bold text-gray-800">{opt.label.split(' ').slice(2).join(' ')}</p>
@@ -1628,10 +1636,10 @@ export default function App() {
                                 <div className="flex items-center gap-1.5 shrink-0">
                                   <Tv className={`w-5 h-5 ${isSelected ? 'text-accent' : 'text-gray-400'}`} />
                                 </div>
-                              </div>
-                              <div>
-                                <p className="text-2xl font-extrabold text-primary">$ {opt.price}<span className="text-sm font-normal text-gray-500">/mes</span></p>
-                                <p className={`text-xs mt-0.5 ${opt.installation.includes('Sin') ? 'text-green-600 font-semibold' : 'text-gray-500'}`}>{opt.installation}</p>
+                                <div>
+                                  <p className="text-2xl font-extrabold text-primary">$ {opt.price}<span className="text-sm font-normal text-gray-500">/mes</span></p>
+                                  <p className={`text-xs mt-0.5 ${String(opt.installation).includes('Sin') ? 'text-green-600 font-semibold' : 'text-orange-500 font-bold'}`}>{opt.installation}</p>
+                                </div>
                               </div>
                               <ul className="space-y-1.5 text-xs text-gray-600 mt-1">
                                 {opt.features.map((f, i) => (
@@ -1651,12 +1659,14 @@ export default function App() {
                           const opt = option as any;
                           const isSelected = planValue === opt.value;
                           const showFeatures = Array.isArray(opt.features) && opt.features.length > 0;
-                          const installationText = section.category === 'home' ? 'Instalación: $9.990' : '';
+                          let installationText = '';
+                          if (section.category === 'home') installationText = 'Instalación: $9.990';
+                          if (section.category === 'pyme') installationText = 'Sin costo de instalación';
                           return (
                             <label key={opt.value}
                               className={`cursor-pointer rounded-2xl border-2 p-5 transition-all flex flex-col gap-3 ${isSelected ? 'border-accent bg-accent/5 shadow-lg scale-[1.01]' : 'border-gray-200 bg-white/70 hover:border-accent/50 hover:shadow-md'}`}>
                               <input type="radio" value={opt.value} className="sr-only" {...register('plan', { required: 'Este campo es requerido' })} />
-                              <div className="flex items-start justify-between gap-2">
+                              <div className="flex flex-col items-center gap-2 text-center">
                                 <div>
                                   <p className="text-sm font-bold text-gray-500 uppercase tracking-wide">{String(opt.label).split(' ').slice(0, 2).join(' ')}</p>
                                   <p className="text-base font-bold text-gray-800">{String(opt.label).split(' ').slice(2).join(' ') || opt.label}</p>
@@ -1664,12 +1674,12 @@ export default function App() {
                                 <div className="flex items-center gap-1.5 shrink-0">
                                   <div className={`w-5 h-5 ${isSelected ? 'text-accent' : 'text-gray-400'}`} />
                                 </div>
-                              </div>
-                              <div>
-                                <p className="text-2xl font-extrabold text-primary">$ {opt.price}<span className="text-sm font-normal text-gray-500">/mes</span></p>
-                                {opt.installation || installationText ? (
-                                  <p className={`text-xs mt-0.5 ${String(opt.installation || installationText).includes('Sin') ? 'text-green-600 font-semibold' : 'text-gray-500'}`}>{opt.installation || installationText || 'Instalación sujeta a factibilidad'}</p>
-                                ) : null}
+                                <div>
+                                  <p className="text-2xl font-extrabold text-primary">$ {opt.price}<span className="text-sm font-normal text-gray-500">/mes</span></p>
+                                  {opt.installation || installationText ? (
+                                    <p className={`text-xs mt-0.5 ${String(opt.installation || installationText).includes('Sin') ? 'text-green-600 font-semibold' : 'text-orange-500 font-bold'}`}>{opt.installation || installationText || 'Instalación sujeta a factibilidad'}</p>
+                                  ) : null}
+                                </div>
                               </div>
                               {showFeatures && (
                                 <ul className="space-y-1.5 text-xs text-gray-600 mt-1">
@@ -1696,7 +1706,7 @@ export default function App() {
                     initial={{ opacity: 0, y: -8 }}
                     animate={{ opacity: 1, y: 0 }}
                     exit={{ opacity: 0, y: -8 }}
-                    className="rounded-2xl border-2 border-accent/30 bg-accent/5 p-5"
+                    className="rounded-2xl border-2 border-accent/30 bg-accent/5 p-4 sm:p-5"
                   >
                     <div className="flex items-start gap-4 flex-wrap sm:flex-nowrap">
                       <div className="flex items-center justify-center w-12 h-12 bg-accent/10 rounded-xl shrink-0">
@@ -1707,17 +1717,17 @@ export default function App() {
                         <p className="text-xs text-gray-500">Tu plan incluye 1 decodificador. Puedes agregar hasta 2 decodificadores extra para otras habitaciones.</p>
                         <p className="text-sm text-accent font-semibold mt-1">Precio por decodificador extra: $ {new Intl.NumberFormat('es-CL').format(PRICE_PER_DECO)}</p>
                       </div>
-                      <div className="flex items-center gap-3 shrink-0 mt-2 sm:mt-0">
+                      <div className="flex items-center gap-3 shrink-0 mt-2 sm:mt-0 w-full sm:w-auto justify-between sm:justify-end">
                         <button
                           type="button"
                           onClick={() => setDecosExtras(Math.max(0, decosExtras - 1))}
                           disabled={decosExtras === 0}
-                          className="w-10 h-10 rounded-xl border-2 border-gray-200 bg-white flex items-center justify-center text-gray-700 hover:border-accent hover:text-accent disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                          className="w-12 h-12 sm:w-10 sm:h-10 rounded-xl border-2 border-gray-200 bg-white flex items-center justify-center text-gray-700 hover:border-accent hover:text-accent disabled:opacity-40 disabled:cursor-not-allowed transition-all"
                           aria-label="Reducir decodificadores"
                         >
                           <Minus className="w-4 h-4" />
                         </button>
-                        <div className="w-12 text-center">
+                        <div className="w-12 text-center flex flex-col items-center">
                           <span className="text-2xl font-extrabold text-primary">{decosExtras}</span>
                           <p className="text-[10px] text-gray-400 leading-tight">extra{decosExtras !== 1 ? 's' : ''}</p>
                         </div>
@@ -1725,7 +1735,7 @@ export default function App() {
                           type="button"
                           onClick={() => setDecosExtras(Math.min(2, decosExtras + 1))}
                           disabled={decosExtras === 2}
-                          className="w-10 h-10 rounded-xl border-2 border-gray-200 bg-white flex items-center justify-center text-gray-700 hover:border-accent hover:text-accent disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+                          className="w-12 h-12 sm:w-10 sm:h-10 rounded-xl border-2 border-gray-200 bg-white flex items-center justify-center text-gray-700 hover:border-accent hover:text-accent disabled:opacity-40 disabled:cursor-not-allowed transition-all"
                           aria-label="Agregar decodificador"
                         >
                           <Plus className="w-4 h-4" />
@@ -1733,7 +1743,7 @@ export default function App() {
                       </div>
                     </div>
                     {decosExtras > 0 && (
-                      <p className="mt-3 text-xs text-accent font-semibold ml-16">
+                      <p className="mt-3 text-xs text-accent font-semibold ml-0 sm:ml-16">
                         {decosExtras === 1 ? '1 decodificador extra seleccionado' : '2 decodificadores extra seleccionados'} — Costo adicional: $ {new Intl.NumberFormat('es-CL').format(decosExtras * PRICE_PER_DECO)}
                       </p>
                     )}
