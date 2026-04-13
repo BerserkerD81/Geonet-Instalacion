@@ -932,7 +932,7 @@ export default function App() {
           pagaInstalacion: false,
         },
         {
-          value: 'Internet Fibra Hogar 600 Mbps + TV - $25.990',
+          value: 'Internet Fibra Hogar 600 Mbps + TV - $26.990',
           label: 'Fibra PLUS 600 Mbps + TV',
           price: '26.990',
           slug: 'home-tv-600',
@@ -958,9 +958,9 @@ export default function App() {
       category: 'pyme' as const,
       options: [
         {
-          value: 'Plan Internet FO PyME 600 Mbps - $25.990',
+          value: 'Plan Internet FO PyME 600 Mbps - $24.990',
           label: 'Internet Fibra Negocio 600 Mb',
-          price: '25.990',
+          price: '24.990',
           slug: 'pyme-600',
           features: [
             'Velocidad simétrica, hasta 600 Mbps subida y bajada',
