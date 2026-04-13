@@ -913,7 +913,7 @@ export default function App() {
       category: 'home' as const,
       options: [
         { value: 'Internet Fibra Hogar 400 Mbps - $13.990', label: 'Fibra HOGAR 400 Mbps', price: '13.990', slug: 'home-400', features: ['Internet hasta 400 MB simétrico', 'Diseñado para hogares pequeños', 'Videollamadas estables', 'Streaming Full HD'], pagaInstalacion: true },
-        { value: 'Internet Fibra Hogar 600 Mbps - $15.990', label: 'Fibra PLUS 600 Mbps', price: '15.990', slug: 'home-600', features: ['Internet hasta 600 MB simétrico', 'Ideal para familias conectadas', 'Teletrabajo fluido', 'Streaming en 4K', 'Alto rendimiento para videollamadas'], pagaInstalacion: true },
+        { value: 'Internet Fibra Hogar 600 Mbps - $16.990', label: 'Fibra PLUS 600 Mbps', price: '16.990', slug: 'home-600', features: ['Internet hasta 600 MB simétrico', 'Ideal para familias conectadas', 'Teletrabajo fluido', 'Streaming en 4K', 'Alto rendimiento para videollamadas'], pagaInstalacion: true },
         { value: 'Internet Fibra Hogar 800 Mbps - $18.990', label: 'Fibra MAX 800 Mbps', price: '18.990', slug: 'home-800', features: ['Internet hasta 800 MB simétrico', 'Perfecto para usuarios exigentes', 'Máximo rendimiento para gaming', 'Streaming en 4K y 8K', 'Teletrabajo avanzado para tareas exigentes', 'Excelente para hogares inteligentes'], pagaInstalacion: true },
       ],
     },
@@ -934,9 +934,9 @@ export default function App() {
         {
           value: 'Internet Fibra Hogar 600 Mbps + TV - $25.990',
           label: 'Fibra PLUS 600 Mbps + TV',
-          price: '25.990',
+          price: '26.990',
           slug: 'home-tv-600',
-          basePrice: '15.990',
+          basePrice: '16.990',
           features: [],
           installation: 'Sin costo de instalación',
           pagaInstalacion: false,
@@ -958,9 +958,9 @@ export default function App() {
       category: 'pyme' as const,
       options: [
         {
-          value: 'Plan Internet FO PyME 600 Mbps - $24.990',
+          value: 'Plan Internet FO PyME 600 Mbps - $25.990',
           label: 'Internet Fibra Negocio 600 Mb',
-          price: '24.990',
+          price: '25.990',
           slug: 'pyme-600',
           features: [
             'Velocidad simétrica, hasta 600 Mbps subida y bajada',
