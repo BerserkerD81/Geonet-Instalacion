@@ -445,6 +445,7 @@ export default function App() {
 
   // ─── Decoders state (0–2 extra decoders) ────────────────────────────────────
   const [decosExtras, setDecosExtras] = useState<number>(0);
+  const [tieneTV, setTieneTV] = useState(false);
   const PRICE_PER_DECO = 3500; // precio por cada decodificador extra
 
   const inferInitialCategory = () => {
@@ -476,7 +477,9 @@ export default function App() {
 
   // Reset decos when switching away from TV plan
   useEffect(() => {
-    if (!isTvPlan(planValue || '')) {
+    const hasTv = isTvPlan(planValue || '');
+    setTieneTV(hasTv);
+    if (!hasTv) {
       setDecosExtras(0);
     }
   }, [planValue]);
@@ -990,7 +993,7 @@ export default function App() {
   ];
 
   const filteredPlanSections = planSections.filter((section) => section.category === planCategory);
-  const currentPlanIsTv = isTvPlan(planValue || '');
+  const currentPlanIsTv = tieneTV;
 
   useEffect(() => {
     try {
